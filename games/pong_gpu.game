@@ -1,0 +1,142 @@
+// ==============================================================================
+// Pong Retro Arcade - GameForge GPU Edition
+// Renderizado com OpenGL 3.3 Core Profile, Sprite Batching e Shaders GLSL
+// ==============================================================================
+
+game "Pong Retro Arcade GPU" {
+    width: 60,
+    height: 22,
+    fps: 60
+}
+
+var score = 0;
+var aiScore = 0;
+var playerPaddle = 0;
+var aiPaddle = 0;
+var ball = 0;
+
+entity Paddle {
+    var x = 3;
+    var y = 10;
+    var vx = 0;
+    var vy = 0;
+    var width = 8;
+    var height = 24;
+    var symbol = "|";
+    var color = "cyan";
+    var glow = 1.0;
+}
+
+entity AIPaddle {
+    var x = 56;
+    var y = 10;
+    var vx = 0;
+    var vy = 0;
+    var width = 8;
+    var height = 24;
+    var symbol = "|";
+    var color = "red";
+    var glow = 1.0;
+}
+
+entity Ball {
+    var x = 30;
+    var y = 10;
+    var vx = 0.35;
+    var vy = 0.20;
+    var width = 10;
+    var height = 10;
+    var symbol = "O";
+    var color = "yellow";
+    var glow = 2.5;
+}
+
+init {
+    playerPaddle = spawn Paddle;
+    playerPaddle.x = 3;
+    playerPaddle.y = 10;
+
+    aiPaddle = spawn AIPaddle;
+    aiPaddle.x = 56;
+    aiPaddle.y = 10;
+
+    ball = spawn Ball;
+    ball.x = 30;
+    ball.y = 10;
+    ball.vx = 0.35;
+    ball.vy = 0.20;
+
+    set_bloom(1.6);
+    set_scanlines(0.20);
+    msg("PONG GPU ARCADE: [W / S ou SETAS]: Mover Raquete | [Q]: Sair", "yellow");
+}
+
+update {
+    // Entrada ultra-responsiva do jogador
+    if (key("up") || key("w")) {
+        playerPaddle.y = playerPaddle.y - 0.45;
+        if (playerPaddle.y < 2) {
+            playerPaddle.y = 2;
+        }
+    }
+    if (key("down") || key("s")) {
+        playerPaddle.y = playerPaddle.y + 0.45;
+        if (playerPaddle.y > 18) {
+            playerPaddle.y = 18;
+        }
+    }
+
+    // Inteligencia Artificial da Raquete Inimiga
+    if (ball.y < aiPaddle.y) {
+        aiPaddle.y = aiPaddle.y - 0.28;
+    }
+    if (ball.y > aiPaddle.y) {
+        aiPaddle.y = aiPaddle.y + 0.28;
+    }
+
+    // Rebatimento nas bordas superior e inferior
+    if (ball.y <= 1) {
+        ball.y = 1;
+        ball.vy = 0 - ball.vy;
+        beep(380, 15);
+    }
+    if (ball.y >= 20) {
+        ball.y = 20;
+        ball.vy = 0 - ball.vy;
+        beep(380, 15);
+    }
+
+    // Ponto marcado pelo jogador
+    if (ball.x >= 58) {
+        score = score + 1;
+        beep(800, 60);
+        ball.x = 30;
+        ball.y = 10;
+        ball.vx = -0.35;
+        msg("PONTO DO JOGADOR! Placar: " + score + " x " + aiScore, "green");
+    }
+
+    // Ponto marcado pela IA
+    if (ball.x <= 1) {
+        aiScore = aiScore + 1;
+        beep(200, 80);
+        ball.x = 30;
+        ball.y = 10;
+        ball.vx = 0.35;
+        msg("PONTO DA IA! Placar: " + score + " x " + aiScore, "red");
+    }
+}
+
+// Colisão: Bola contra Raquete do Jogador
+on collision(Ball, Paddle) as (b, p) {
+    b.vx = 0 - b.vx;
+    b.x = p.x + 1.2;
+    beep(600, 20);
+}
+
+// Colisão: Bola contra Raquete da IA
+on collision(Ball, AIPaddle) as (b, ap) {
+    b.vx = 0 - b.vx;
+    b.x = ap.x - 1.2;
+    beep(500, 20);
+}

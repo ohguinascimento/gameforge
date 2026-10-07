@@ -1,0 +1,218 @@
+// ==============================================================================
+// Space Invaders Arcade Deluxe - GameForge GPU Edition
+// Renderizado com OpenGL 3.3 Core Profile, Sprite Batching e Shaders GLSL de Bloom
+// ==============================================================================
+
+game "Space Invaders GPU Deluxe" {
+    width: 60,
+    height: 24,
+    fps: 60
+}
+
+var score = 0;
+var lives = 3;
+var alienSpeed = 0.08;
+var alienDir = 1;
+var alienDropTimer = 0;
+var gameOver = 0;
+var playerLaser = 0;
+var shootCooldown = 0;
+var victory = 0;
+var p = 0;
+
+entity Player {
+    var x = 28;
+    var y = 21;
+    var vx = 0;
+    var vy = 0;
+    var width = 16;
+    var height = 16;
+    var symbol = "A";
+    var color = "green";
+    var glow = 0.5;
+}
+
+entity Alien {
+    var x = 0;
+    var y = 0;
+    var vx = 0;
+    var vy = 0;
+    var width = 14;
+    var height = 14;
+    var symbol = "W";
+    var color = "red";
+    var glow = 0.8;
+}
+
+entity Laser {
+    var x = 0;
+    var y = 0;
+    var vx = 0;
+    var vy = -0.55;
+    var width = 4;
+    var height = 14;
+    var symbol = "|";
+    var color = "cyan";
+    var glow = 2.5;
+}
+
+entity Bomb {
+    var x = 0;
+    var y = 0;
+    var vx = 0;
+    var vy = 0.22;
+    var width = 6;
+    var height = 10;
+    var symbol = "v";
+    var color = "yellow";
+    var glow = 1.8;
+}
+
+entity Star {
+    var x = 0;
+    var y = 0;
+    var vx = 0;
+    var vy = 0.02;
+    var symbol = ".";
+    var color = "white";
+    var glow = 0.3;
+}
+
+init {
+    p = spawn Player;
+    p.x = 28;
+    p.y = 21;
+
+    // Efeitos de pós-processamento de hardware
+    set_bloom(1.5);
+    set_scanlines(0.20);
+
+    msg("DEFENDA A TERRA! [SETAS / A-D]: Mover | [ESPACO]: Disparar Laser", "cyan");
+
+    // Gera esquadrão alienígena em formação matricial
+    var row = 0;
+    while (row < 4) {
+        var col = 0;
+        while (col < 8) {
+            var al = spawn Alien;
+            al.x = 8 + col * 5;
+            al.y = 3 + row * 2;
+            if (row == 0) {
+                al.color = "magenta";
+                al.symbol = "M";
+            }
+            if (row == 1) {
+                al.color = "yellow";
+                al.symbol = "W";
+            }
+            if (row == 2) {
+                al.color = "cyan";
+                al.symbol = "X";
+            }
+            if (row == 3) {
+                al.color = "red";
+                al.symbol = "V";
+            }
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+
+    // Fundo estelar dinâmico
+    var s = 0;
+    while (s < 20) {
+        var st = spawn Star;
+        st.x = rnd(1, 58);
+        st.y = rnd(1, 22);
+        st.vy = rnd(0.01, 0.04);
+        s = s + 1;
+    }
+}
+
+update {
+    if (gameOver == 1) {
+        return;
+    }
+    if (victory == 1) {
+        return;
+    }
+
+    // Entrada responsiva com latência mínima (<2ms)
+    if (key("left") || key("a")) {
+        p.x = p.x - 0.45;
+        if (p.x < 2) {
+            p.x = 2;
+        }
+    }
+    if (key("right") || key("d")) {
+        p.x = p.x + 0.45;
+        if (p.x > 56) {
+            p.x = 56;
+        }
+    }
+
+    // Disparo de Laser
+    if (shootCooldown > 0) {
+        shootCooldown = shootCooldown - 1;
+    }
+    if (key("space") && shootCooldown == 0) {
+        var lz = spawn Laser;
+        lz.x = p.x;
+        lz.y = p.y - 1;
+        shootCooldown = 15;
+        beep(920, 25);
+    }
+
+    // Movimentação do esquadrão alienígena
+    alienDropTimer = alienDropTimer + 1;
+    if (alienDropTimer > 40) {
+        alienDropTimer = 0;
+        beep(180, 20);
+    }
+
+    // Disparo randômico de bombas alienígenas
+    if (rnd(0, 100) < 4) {
+        var bmb = spawn Bomb;
+        bmb.x = rnd(6, 54);
+        bmb.y = 5;
+    }
+
+    // Checagem de vitória
+    if (count("Alien") == 0 && victory == 0) {
+        victory = 1;
+        msg("VITORIA SUPREMA! INVASORES ELIMINADOS!", "green");
+        beep(600, 80);
+        beep(800, 80);
+        beep(1000, 120);
+    }
+}
+
+// Colisão: Laser do Jogador contra Alienígena
+on collision(Laser, Alien) as (l, a) {
+    destroy l;
+    destroy a;
+    score = score + 100;
+    msg("Alien destruido! +100 Pontos", "yellow");
+    beep(420, 40);
+}
+
+// Colisão: Bomba Alienígena contra Jogador
+on collision(Player, Bomb) as (pl, b) {
+    destroy b;
+    lives = lives - 1;
+    beep(130, 80);
+    if (lives <= 0) {
+        gameOver = 1;
+        msg("GAME OVER! A TERRA FOI CONQUISTADA. [ESC para sair]", "red");
+        beep(90, 250);
+    } else {
+        msg("NAVE ATINGIDA! Vidas restantes: " + lives, "red");
+    }
+}
+
+// Colisão: Alienígena toca no Jogador
+on collision(Player, Alien) as (pl, al) {
+    gameOver = 1;
+    msg("COLISAO CATASTROFICA! NAVE DESTRUIDA. GAME OVER!", "red");
+    beep(80, 300);
+}

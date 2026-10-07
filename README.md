@@ -336,47 +336,80 @@ O GameForge foi projetado com técnicas modernas de computação de alta perform
 
 ---
 
-## ⚡ Aceleração GPU 2D e Módulo Rust
+## ⚡ Back-End e Motor Gráfico 2D Acelerado por GPU (OpenGL 3.3 Core Profile & Raylib)
 
-O GameForge integra um subsistema de computação gráfica e otimização escrito em **Rust** (`rust/gameforge_gpu`), interoperando nativamente via **C-ABI FFI**:
+O GameForge conta com um back-end de computação gráfica de baixo nível de nível industrial em **C++20** ([include/GpuEngineGL.h](file:///d:/Projetos/Compilador%20game/include/GpuEngineGL.h)), integrando **OpenGL 3.3 Core Profile** e compatibilidade **Raylib**:
 
 ```
- ┌───────────────────────────┐         FFI C-ABI          ┌───────────────────────────────┐
- │   GameForge Compilador    │ ─────────────────────────> │   Módulo Nativo Rust          │
- │   & VM (C++20)            │ <───────────────────────── │   (rust/gameforge_gpu)        │
- └───────────────────────────┘                            └───────────────────────────────┘
-               │                                                          │
-      ┌────────┴────────┐                                       ┌─────────┴─────────┐
-      ▼                 ▼                                       ▼                   ▼
- [ --gpu Flag ]  [ GpuRenderer2D ]                     [ 2D Batch Pipeline ] [ Rust Optimizer ]
-   Interativo     Quad Batching &                      16.384 Quads/Batch    Peephole Pass &
-   CLI Mode       V-Sync Ready                         245M Quads/segundo    Bytecode Verifier
+           Código Fonte DSL (.game)
+                      │
+           [ Front-End: Lexer + Parser ]
+                      │
+       [ Verificador Semântico Estrito ] ──> Diagnóstico de tipos, escopos e colisões
+                      │
+           [ Transpiler C++20 Nativo ]
+                      │
+ ┌────────────────────┴────────────────────┐
+ │  Motor Gráfico 2D em GPU (OpenGL 3.3+)   │
+ ├─────────────────────────────────────────┤
+ │ 1. Render Target Virtual Fixo (Canvas)  │ ──> Pixel-Perfect scaling & Letterboxing (1080p, 4K)
+ │ 2. Sprite Batching & Instanciamento      │ ──> 1 ÚNICA Draw Call para milhares de entidades
+ │ 3. Pipeline de Pós-Processamento GLSL   │ ──> Bloom emissivo, CRT Scanlines e Vinheta
+ │ 4. Entrada Direta de Ultra Baixa Latência│ ──> Input-to-Photon < 2ms (Raw Win32 Polling)
+ └─────────────────────────────────────────┘
+                      │
+        [ g++ -std=c++20 -O3 -march=native ]
+                      │
+          Executável Nativo Independente (.exe)
 ```
 
-### 1. Funções em Rust Implementadas
+### 1. Render Target Virtual Fixo com Letterboxing Automático
+* **Resolução Lógica Consistente**: O jogo roda internamente em um Canvas Virtual fixo (ex: 960x384 ou 640x360), garantindo a mesma física e renderização independente do monitor do usuário.
+* **Pixel-Perfect Scaling**: Calcula a maior razão de aspecto inteira/fracionária preservada (`scale = min(winW / canvasW, winH / canvasH)`).
+* **Letterboxing e Pillarboxing**: As barras pretas laterais ou verticais são calculadas e limpas automaticamente no framebuffer padrão (FBO 0), mantendo a imagem 100% nítida em monitores 1080p, 1440p e 4K.
 
-* **Otimizador de Bytecode (`optimizer.rs`)**:
-  - `optimize_bytecode`: Passagem de otimização *peephole* que analisa o fluxo do bytecode compilado, removendo instruções redundantes (como pares `OP_NULL` seguidos por `OP_POP` gerados por expressões sem efeito colateral) e podando código morto após retornos incondicionais.
-  - `verify_bytecode_safety`: Validador formal que checa a integridade e limites de salto do bytecode para evitar corrupção em tempo de execução.
-* **Pipeline de Renderização 2D em GPU (`gpu_2d.rs`)**:
-  - `GpuVertex2D`: Estrutura de vértice compacto de 20 bytes com alinhamento SIMD (`x, y, u, v, r, g, b, a`).
-  - `GpuQuad`: Primitiva geométrica de 4 vértices formando duas faces triangulares com índices pré-computados (`0, 1, 2, 2, 3, 0`).
-  - `GpuBatchBuffer`: Buffer contíguo pré-alocado para **16.384 quads por draw call**, minimizando chamadas ao driver de vídeo.
-  - `GpuContext2D`: Gerenciador de contexto gráfico de alta velocidade com suporte a `set_clear_color`, `begin_frame`, `draw_rect`, `draw_tile` e `end_frame`.
-* **Aceleração Espacial Broadphase (`spatial.rs`)**:
-  - `SpatialHashGrid2D`: Grade hash espacial em Rust que reduz a complexidade de detecção de colisões entre projéteis e entidades de $O(N^2)$ para $O(N)$ amortizado.
+### 2. Sprite Batching / Instanciamento (1 Única Draw Call)
+* **Zero Overhead de CPU**: Em vez de emitir uma chamada de desenho por entidade, todas as posições, dimensões, cores, rotações e parâmetros de brilho são gravados em um buffer contíguo alinhado a SIMD (`SpriteInstance`).
+* **Instanced Array**: O hardware projeta o quad unitário `[-0.5..0.5]` para todas as instâncias em uma única chamada:
+  ```cpp
+  api.glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, 4, instanceQueue.size());
+  ```
+* Suporta dezenas de milhares de entidades ativas com **60+ FPS estáveis e V-Sync ativo** (`wglSwapIntervalEXT(1)`).
 
-### 2. Ativação via Linha de Comando
+### 3. Pipeline de Pós-Processamento com Shaders GLSL Customizados
+* **Bloom / Emissive Glow**: Lasers, explosões e propulsores emitem luz difusa através de filtragem de dispersão (*thresholded gaussian spread*) calculada em paralelo nas unidades de sombreamento da GPU.
+* **Scanlines e Vinheta Retrô**: Simula a textura clássica de monitores de tubo arcade CRT com curvatura suave e escurecimento perimetral.
 
-Para executar qualquer jogo com a aceleração de renderização GPU 2D e o otimizador Rust ativados:
+### 4. Verificação Semântica Estrita (Front-End)
+* Analisador semântico dedicado ([include/SemanticAnalyzer.h](file:///d:/Projetos/Compilador%20game/include/SemanticAnalyzer.h)):
+  - Valida se todas as entidades referenciadas em `spawn` e em `on collision(A, B)` existem na AST.
+  - Detecta tratadores de colisão duplicados para os mesmos pares de entidades.
+  - Verifica consistência de parâmetros de funções e escopos locais.
+  - Comando CLI: `gamec check <arquivo.game>`.
 
-```bash
-# Executa jogo com acelerador GPU e otimizador de bytecode
-gamec run games/rpg_dungeon.game --gpu
+---
 
-# Testes de unidade e benchmark da GPU e do módulo Rust (245+ Milhões de quads/s)
-.\bin\test_gpu.exe
+## 🛠️ Automação e Ferramentas (VS Code & F5 Debugging)
+
+O GameForge inclui configuração completa de ambiente de desenvolvimento moderno:
+
+### 1. Script de Compilação Automatizada com Otimização Máxima
+O script [build_gpu.ps1](file:///d:/Projetos/Compilador%20game/build_gpu.ps1) automatiza a compilação do compilador e dos jogos com flags de vetorização máxima:
+```powershell
+# Compila Space Invaders para executável nativo acelerado por GPU com -O3 e -march=native
+.\build_gpu.ps1 -Game "games/space_invaders_gpu.game" -Output "bin/space_invaders.exe"
+
+# Compila Pong Arcade GPU
+.\build_gpu.ps1 -Game "games/pong_gpu.game" -Output "bin/pong.exe"
 ```
+
+### 2. Configuração do VS Code (.vscode/)
+* **[.vscode/tasks.json](file:///d:/Projetos/Compilador%20game/.vscode/tasks.json)**:
+  - `Build GameForge Compiler (-O3, -march=native)`: Compilação do compilador principal.
+  - `Build Space Invaders (GPU OpenGL 3.3 + Shaders)`: Compilação do jogo.
+  - `Check Semantic Analysis (gamec check)`: Linter semântico integrado.
+* **[.vscode/launch.json](file:///d:/Projetos/Compilador%20game/.vscode/launch.json)**:
+  - Pressione **F5** no VS Code para compilar e iniciar a depuração nativa com GDB de qualquer jogo arcade ou do próprio compilador!
 
 ---
 

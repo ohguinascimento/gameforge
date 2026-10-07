@@ -7,6 +7,7 @@
 #include "Transpiler.h"
 #include "Version.h"
 #include "GpuRenderer.h"
+#include "SemanticAnalyzer.h"
 
 using namespace GameLang;
 
@@ -28,8 +29,9 @@ static void printHelp() {
     std::cout << "Uso: gamec <comando> <arquivo.game> [opcoes]\n\n";
     std::cout << "Comandos:\n";
     std::cout << "  \033[1;33mrun <arquivo>\033[0m          Compila para bytecode e executa na VM do jogo\n";
-    std::cout << "  \033[1;33mtranspile <arquivo>\033[0m    Gera codigo fonte C++ independente (-o <saida.cpp>)\n";
-    std::cout << "  \033[1;33mbuild <arquivo>\033[0m        Transpila e compila para executavel nativo .exe (-o <jogo.exe>)\n";
+    std::cout << "  \033[1;33mcheck <arquivo>\033[0m        Executa analise semantica estrita e verificacao de tipos da AST\n";
+    std::cout << "  \033[1;33mtranspile <arquivo>\033[0m    Gera codigo C++20 nativo (-o <saida.cpp>, padrao GPU / OpenGL 3.3)\n";
+    std::cout << "  \033[1;33mbuild <arquivo>\033[0m        Compila para executavel nativo .exe com GPU e -O3 (-o <jogo.exe>)\n";
     std::cout << "  \033[1;33mdump-ast <arquivo>\033[0m     Exibe a Abstract Syntax Tree (AST)\n";
     std::cout << "  \033[1;33mdump-bc <arquivo>\033[0m      Exibe o Bytecode descompilado (Disassembly)\n";
     std::cout << "  \033[1;33mversion / -v\033[0m           Exibe a versao do GameForge\n";
@@ -38,12 +40,13 @@ static void printHelp() {
     std::cout << "  \033[1;32m--safe-mode / -f\033[0m       (Padrao) Isola erros de runtime e parsing para evitar crash\n";
     std::cout << "  \033[1;32m--ignore-errors\033[0m        Continua execucao mesmo com erros pontuais de sintaxe\n";
     std::cout << "  \033[1;32m--strict\033[0m               Modo estrito: interrompe na primeira falha\n\n";
-    std::cout << "Opcoes Graficas e Otimizacao:\n";
-    std::cout << "  \033[1;35m--gpu\033[0m                  Aceleracao de renderizacao 2D via GPU + Otimizacao de Bytecode Rust\n\n";
+    std::cout << "Opcoes Graficas e Back-end:\n";
+    std::cout << "  \033[1;35m--gpu\033[0m                  (Padrao no build) Pipeline acelerado por GPU (OpenGL 3.3 + Shaders GLSL + Rust)\n";
+    std::cout << "  \033[1;35m--console\033[0m              Forca geracao de executavel para terminal retro (ANSI Escape sequences)\n\n";
     std::cout << "Exemplos:\n";
-    std::cout << "  gamec run games/space_invaders.game\n";
-    std::cout << "  gamec run games/rpg_dungeon.game --gpu\n";
-    std::cout << "  gamec build games/rpg_dungeon.game -o bin/rpg.exe\n";
+    std::cout << "  gamec check games/space_invaders.game\n";
+    std::cout << "  gamec run games/space_invaders.game --gpu\n";
+    std::cout << "  gamec build games/space_invaders.game -o bin/invaders.exe\n";
     std::cout << "  gamec transpile games/pong.game -o pong.cpp\n\n";
 }
 
@@ -79,6 +82,7 @@ int main(int argc, char* argv[]) {
     bool safeMode = true;
     bool strictMode = false;
     bool useGpu = false;
+    bool useConsole = false;
     for (int i = 3; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--strict") {
@@ -89,6 +93,8 @@ int main(int argc, char* argv[]) {
             strictMode = false;
         } else if (arg == "--gpu") {
             useGpu = true;
+        } else if (arg == "--console") {
+            useConsole = true;
         }
     }
 
@@ -128,6 +134,23 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Step 2.5: Verificacao Semantica Estrita
+    SemanticAnalyzer semanticAnalyzer;
+    bool semOk = semanticAnalyzer.analyze(*program);
+    if (cmd == "check") {
+        semanticAnalyzer.printReport(std::cout);
+        return semanticAnalyzer.hasErrors() ? 1 : 0;
+    }
+    if (!semOk) {
+        if (strictMode) {
+            std::cerr << "\033[1;31m[Falha na Verificacao Semantica]:\033[0m\n";
+            semanticAnalyzer.printReport(std::cerr);
+            return 1;
+        } else {
+            semanticAnalyzer.printReport(std::cerr);
+        }
+    }
+
     // Handle dump-ast
     if (cmd == "dump-ast") {
         std::cout << "\033[1;32m=== Abstract Syntax Tree (AST) ===\033[0m\n";
@@ -138,6 +161,7 @@ int main(int argc, char* argv[]) {
     // Handle transpile
     if (cmd == "transpile") {
         std::string outPath = "output.cpp";
+        bool targetGpu = !useConsole;
         for (int i = 3; i < argc; ++i) {
             if (std::string(argv[i]) == "-o" && i + 1 < argc) {
                 outPath = argv[i + 1];
@@ -145,7 +169,7 @@ int main(int argc, char* argv[]) {
             }
         }
         Transpiler transpiler;
-        std::string cppCode = transpiler.transpileToCpp(*program);
+        std::string cppCode = transpiler.transpileToCpp(*program, targetGpu ? TranspileTarget::OpenGL33 : TranspileTarget::Console);
         std::ofstream outFile(outPath);
         if (!outFile.is_open()) {
             std::cerr << "Erro ao gravar em " << outPath << std::endl;
@@ -153,13 +177,15 @@ int main(int argc, char* argv[]) {
         }
         outFile << cppCode;
         outFile.close();
-        std::cout << "\033[1;32m[Sucesso]\033[0m Codigo C++ transpilado com sucesso em: " << outPath << "\n";
+        std::cout << "\033[1;32m[Sucesso]\033[0m Codigo C++ transpilado com sucesso (" 
+                  << (targetGpu ? "OpenGL 3.3 GPU Core" : "Console Retro") << ") em: " << outPath << "\n";
         return 0;
     }
 
     // Handle build (Transpile -> g++ compile to native .exe)
     if (cmd == "build") {
         std::string exePath = "game.exe";
+        bool targetGpu = !useConsole;
         for (int i = 3; i < argc; ++i) {
             if (std::string(argv[i]) == "-o" && i + 1 < argc) {
                 exePath = argv[i + 1];
@@ -167,7 +193,7 @@ int main(int argc, char* argv[]) {
             }
         }
         Transpiler transpiler;
-        std::string cppCode = transpiler.transpileToCpp(*program);
+        std::string cppCode = transpiler.transpileToCpp(*program, targetGpu ? TranspileTarget::OpenGL33 : TranspileTarget::Console);
         std::string tmpCpp = "_temp_build.cpp";
         std::ofstream tmpFile(tmpCpp);
         tmpFile << cppCode;
@@ -183,9 +209,11 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        std::cout << "\033[1;33mCompilando executavel nativo com g++...\033[0m\n";
-        std::string buildCmd = "\"" + gppCmd + "\" -std=c++20 -O2 " + tmpCpp + " -o " + exePath;
-        // On Windows cmd, wrap whole line in an extra quote
+        std::cout << "\033[1;33mCompilando executavel nativo (" 
+                  << (targetGpu ? "OpenGL 3.3 GPU Core com -O3 -march=native" : "Console com -O3") << ")...\033[0m\n";
+        std::string buildCmd = "\"" + gppCmd + "\" -std=c++20 -O3 -march=native -I include " + tmpCpp +
+                               (targetGpu ? " -lopengl32 -lgdi32 -luser32" : "") +
+                               " -o " + exePath;
         #ifdef _WIN32
         buildCmd = "\"" + buildCmd + "\"";
         #endif

@@ -17,6 +17,7 @@ $sources = @(
     "src/GpuRenderer.cpp",
     "src/Lexer.cpp",
     "src/Parser.cpp",
+    "src/SemanticAnalyzer.cpp",
     "src/VM.cpp",
     "src/Transpiler.cpp",
     "src/main.cpp"

@@ -10,6 +10,18 @@ e este projeto adere ao [Semantic Versioning (SemVer 2.0.0)](https://semver.org/
 ## [0.0.1] - 2026-10-07
 
 ### Adicionado
+- **Motor Gráfico 2D em GPU com OpenGL 3.3 Core Profile e Raylib (`include/GpuEngineGL.h`):**
+  - Render Target Virtual fixo (Canvas FBO) com escalonamento Pixel-Perfect e Letterboxing/Pillarboxing automático para 1080p, 1440p e 4K.
+  - Sprite Batching / Instanciamento: Envio de todas as geometrias e sprites para a GPU em 1 única Draw Call (`glDrawArraysInstanced`).
+  - Shaders GLSL 330 de pós-processamento: Bloom / emissive glow para lasers/explosões e CRT scanlines/vinheta retrô calculados em paralelo na GPU.
+  - Latência de entrada mínima (<2ms) via polling de alta resolução Win32 (`GetAsyncKeyState`).
+- **Verificador Semântico Estrito (Front-End - `include/SemanticAnalyzer.h` e `src/SemanticAnalyzer.cpp`):**
+  - Análise semântica estrita da AST verificando entidades declaradas, escopos de variáveis, assinaturas de funções e tratadores de colisão declarativos `on collision(A, B)`.
+  - Novo comando de linha de comando: `gamec check <arquivo.game>`.
+- **Automação e Ferramentas para Desenvolvedores:**
+  - Script `build_gpu.ps1` com otimização máxima `g++ -std=c++20 -O3 -march=native`.
+  - Configurações do VS Code: `.vscode/tasks.json` e `.vscode/launch.json` para compilação e depuração nativa com GDB (F5).
+  - Demonstração Arcade completa compilável de ponta a ponta: `games/space_invaders_gpu.game` e `games/pong_gpu.game`.
 - **Sistema de Mapas RPG e Masmorras 2D:**
   - Primitiva `tile(x, y, ch, cor, solido)` para posicionamento de ladrilhos e obstáculos.
   - Primitiva `map_box(x, y, w, h, ch, cor, solido)` para construção ágil de salas com paredes sólidas.

@@ -5,5 +5,7 @@ build/
 _temp_build.cpp
 
 # IDE
-.vscode/
 .idea/
+!.vscode/
+!.vscode/tasks.json
+!.vscode/launch.json

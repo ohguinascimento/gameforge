@@ -52,7 +52,445 @@ void Transpiler::emitIndent(std::ostringstream& ss, int indent) {
     for (int i = 0; i < indent; ++i) ss << "    ";
 }
 
-std::string Transpiler::transpileToCpp(const Program& program) {
+std::string Transpiler::transpileToCpp(const Program& program, TranspileTarget target) {
+    if (target == TranspileTarget::OpenGL33) {
+        return transpileOpenGL(program);
+    }
+    return transpileConsole(program);
+}
+
+// ============================================================================
+// Back-End OpenGL 3.3 Core Profile (Hardware Accelerated GPU)
+// ============================================================================
+std::string Transpiler::transpileOpenGL(const Program& program) {
+    std::ostringstream ss;
+
+    std::set<std::string> accessedMembers;
+    std::set<std::string> calledFunctions;
+    for (const auto& g : program.globals) {
+        if (g->initializer) collectExpr(g->initializer.get(), accessedMembers, calledFunctions);
+    }
+    for (const auto& fn : program.functions) {
+        if (fn->body) collectStmt(fn->body.get(), accessedMembers, calledFunctions);
+    }
+    if (program.initBlock) collectStmt(program.initBlock.get(), accessedMembers, calledFunctions);
+    if (program.updateBlock) collectStmt(program.updateBlock.get(), accessedMembers, calledFunctions);
+    if (program.renderBlock) collectStmt(program.renderBlock.get(), accessedMembers, calledFunctions);
+    for (const auto& ch : program.collisionHandlers) {
+        if (ch->body) collectStmt(ch->body.get(), accessedMembers, calledFunctions);
+    }
+
+    ss << "// ============================================================================\n";
+    ss << "// GameForge: Jogo Acelerado por GPU em C++20 Nativo (OpenGL 3.3 Core Profile)\n";
+    ss << "// Pipeline: 1 Draw Call Instanciado, Virtual Canvas FBO, Shaders GLSL de Bloom/CRT\n";
+    ss << "// ============================================================================\n";
+    ss << "#include \"GpuEngineGL.h\"\n";
+    ss << "#include <iostream>\n";
+    ss << "#include <vector>\n";
+    ss << "#include <string>\n";
+    ss << "#include <unordered_map>\n";
+    ss << "#include <memory>\n";
+    ss << "#include <chrono>\n";
+    ss << "#include <thread>\n";
+    ss << "#include <cmath>\n";
+    ss << "#include <random>\n";
+    ss << "#include <algorithm>\n\n";
+
+    ss << "namespace GameRuntime {\n";
+
+    ss << R"RAW(
+    static void parseColorRgb(const std::string& name, float& r, float& g, float& b) {
+        std::string s = name;
+        std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+        if (s == "red")     { r = 1.0f; g = 0.2f; b = 0.2f; }
+        else if (s == "green")   { r = 0.2f; g = 1.0f; b = 0.2f; }
+        else if (s == "yellow")  { r = 1.0f; g = 0.95f; b = 0.2f; }
+        else if (s == "blue")    { r = 0.2f; g = 0.4f; b = 1.0f; }
+        else if (s == "magenta") { r = 1.0f; g = 0.2f; b = 1.0f; }
+        else if (s == "cyan")    { r = 0.2f; g = 0.95f; b = 1.0f; }
+        else if (s == "white")   { r = 1.0f; g = 1.0f; b = 1.0f; }
+        else if (s == "black")   { r = 0.05f; g = 0.05f; b = 0.08f; }
+        else { r = 0.8f; g = 0.8f; b = 0.8f; }
+    }
+)RAW";
+
+    ss << "    struct BaseEntity {\n";
+    ss << "        uint32_t id = 0;\n";
+    ss << "        std::string type;\n";
+    ss << "        bool active = true;\n";
+    ss << "        double x = 0;\n";
+    ss << "        double y = 0;\n";
+    ss << "        double vx = 0;\n";
+    ss << "        double vy = 0;\n";
+    ss << "        double hp = 0;\n";
+    ss << "        double alive = 1;\n";
+    ss << "        double width = 16;\n";
+    ss << "        double height = 16;\n";
+    ss << "        double glow = 0.2;\n";
+    ss << "        std::string symbol = \"?\";\n";
+    ss << "        std::string color = \"white\";\n";
+    for (const auto& mem : accessedMembers) {
+        if (mem != "x" && mem != "y" && mem != "vx" && mem != "vy" &&
+            mem != "hp" && mem != "alive" && mem != "symbol" && mem != "color" &&
+            mem != "id" && mem != "type" && mem != "active" &&
+            mem != "width" && mem != "height" && mem != "glow") {
+            ss << "        double " << mem << " = 0.0;\n";
+        }
+    }
+    ss << "        virtual ~BaseEntity() = default;\n";
+    ss << "    };\n\n";
+
+    ss << R"RAW(
+    struct Value {
+        double num = 0.0;
+        std::string str;
+        std::shared_ptr<BaseEntity> entity = nullptr;
+
+        Value() = default;
+        Value(double n) : num(n) {}
+        Value(int n) : num(static_cast<double>(n)) {}
+        Value(const char* s) : str(s) {}
+        Value(std::string s) : str(std::move(s)) {}
+        template<typename T>
+        Value(std::shared_ptr<T> e) : entity(std::static_pointer_cast<BaseEntity>(e)) {}
+
+        static BaseEntity* getSafeDummy() {
+            static BaseEntity dummy;
+            dummy.active = false;
+            return &dummy;
+        }
+        BaseEntity* operator->() const { return entity ? entity.get() : getSafeDummy(); }
+        explicit operator double() const { return num; }
+        explicit operator int() const { return static_cast<int>(num); }
+        operator bool() const { return entity != nullptr || num != 0.0; }
+
+        Value& operator=(double n) { num = n; entity = nullptr; return *this; }
+        Value& operator=(int n) { num = static_cast<double>(n); entity = nullptr; return *this; }
+        Value& operator=(const std::string& s) { str = s; return *this; }
+        template<typename T>
+        Value& operator=(std::shared_ptr<T> e) { entity = std::static_pointer_cast<BaseEntity>(e); return *this; }
+
+        Value operator+(const Value& o) const {
+            if (!str.empty() || !o.str.empty()) {
+                std::string s1 = str.empty() ? std::to_string(static_cast<int>(num)) : str;
+                std::string s2 = o.str.empty() ? std::to_string(static_cast<int>(o.num)) : o.str;
+                return Value(s1 + s2);
+            }
+            return Value(num + o.num);
+        }
+        Value operator-(const Value& o) const { return Value(num - o.num); }
+        Value operator*(const Value& o) const { return Value(num * o.num); }
+        Value operator/(const Value& o) const { return Value(o.num != 0 ? num / o.num : 0); }
+        bool operator==(const Value& o) const { return num == o.num && entity == o.entity; }
+        bool operator!=(const Value& o) const { return !(*this == o); }
+        bool operator<(const Value& o) const { return num < o.num; }
+        bool operator<=(const Value& o) const { return num <= o.num; }
+        bool operator>(const Value& o) const { return num > o.num; }
+        bool operator>=(const Value& o) const { return num >= o.num; }
+
+        Value operator+(double d) const { return Value(num + d); }
+        Value operator-(double d) const { return Value(num - d); }
+        Value operator*(double d) const { return Value(num * d); }
+        Value operator/(double d) const { return Value(d != 0 ? num / d : 0); }
+        Value operator+(int i) const { return Value(num + i); }
+        Value operator-(int i) const { return Value(num - i); }
+        Value operator*(int i) const { return Value(num * i); }
+        Value operator/(int i) const { return Value(i != 0 ? num / i : 0); }
+
+        bool operator==(double d) const { return num == d; }
+        bool operator!=(double d) const { return num != d; }
+        bool operator<(double d) const { return num < d; }
+        bool operator<=(double d) const { return num <= d; }
+        bool operator>(double d) const { return num > d; }
+        bool operator>=(double d) const { return num >= d; }
+
+        bool operator==(int i) const { return num == static_cast<double>(i); }
+        bool operator!=(int i) const { return num != static_cast<double>(i); }
+        bool operator<(int i) const { return num < static_cast<double>(i); }
+        bool operator<=(int i) const { return num <= static_cast<double>(i); }
+        bool operator>(int i) const { return num > static_cast<double>(i); }
+        bool operator>=(int i) const { return num >= static_cast<double>(i); }
+
+        bool operator==(const char* s) const { return str == s; }
+        bool operator!=(const char* s) const { return str != s; }
+        bool operator==(const std::string& s) const { return str == s; }
+        bool operator!=(const std::string& s) const { return str != s; }
+        Value operator+(const char* s) const {
+            std::string s1 = str.empty() ? std::to_string(static_cast<int>(num)) : str;
+            return Value(s1 + s);
+        }
+        Value operator+(const std::string& s) const {
+            std::string s1 = str.empty() ? std::to_string(static_cast<int>(num)) : str;
+            return Value(s1 + s);
+        }
+    };
+
+    inline Value operator+(const char* s, const Value& v) {
+        std::string s2 = v.str.empty() ? std::to_string(static_cast<int>(v.num)) : v.str;
+        return Value(std::string(s) + s2);
+    }
+    inline Value operator+(const std::string& s, const Value& v) {
+        std::string s2 = v.str.empty() ? std::to_string(static_cast<int>(v.num)) : v.str;
+        return Value(s + s2);
+    }
+)RAW";
+
+    ss << "    static GameForge::GL::HardwareEngineGL* gEngine = nullptr;\n";
+    ss << "    static std::vector<std::shared_ptr<BaseEntity>> entities;\n";
+    ss << "    static uint32_t nextEntityId = 1;\n";
+    ss << "    static std::string hudMessage = \"\";\n";
+    ss << "    static double coordScale = 16.0;\n\n";
+
+    ss << R"RAW(
+    inline bool key(const std::string& k) {
+        if (!gEngine) return false;
+        if (k == "left" || k == "LEFT" || k == "a" || k == "A") return gEngine->isKeyDown(VK_LEFT) || gEngine->isKeyDown('A');
+        if (k == "right" || k == "RIGHT" || k == "d" || k == "D") return gEngine->isKeyDown(VK_RIGHT) || gEngine->isKeyDown('D');
+        if (k == "up" || k == "UP" || k == "w" || k == "W") return gEngine->isKeyDown(VK_UP) || gEngine->isKeyDown('W');
+        if (k == "down" || k == "DOWN" || k == "s" || k == "S") return gEngine->isKeyDown(VK_DOWN) || gEngine->isKeyDown('S');
+        if (k == "space" || k == "SPACE") return gEngine->isKeyDown(VK_SPACE);
+        if (k == "q" || k == "Q" || k == "esc" || k == "escape") return gEngine->isKeyDown('Q') || gEngine->isKeyDown(VK_ESCAPE);
+        if (k == "enter" || k == "return") return gEngine->isKeyDown(VK_RETURN);
+        return false;
+    }
+    inline bool key_down(const std::string& k) { return key(k); }
+    inline bool key_pressed(const std::string& k) { return key(k); }
+
+    inline void beep(int freq = 440, int duration = 50) {
+        std::thread([=]() { Beep(freq, duration); }).detach();
+    }
+
+    inline double random(double min, double max) {
+        static std::mt19937 rng(1337);
+        std::uniform_real_distribution<double> dist(min, max);
+        return dist(rng);
+    }
+    inline double rnd(double min, double max) { return random(min, max); }
+
+    inline void msg(const Value& text, const std::string& col = "yellow") {
+        hudMessage = text.str.empty() ? std::to_string(static_cast<int>(text.num)) : text.str;
+    }
+    inline void dialog(const Value& text, const std::string& col = "white") { msg(text, col); }
+    inline void set_bloom(double intensity) { if (gEngine) gEngine->setBloom(static_cast<float>(intensity)); }
+    inline void set_scanlines(double strength) { if (gEngine) gEngine->setScanlines(static_cast<float>(strength)); }
+
+    inline void tile(double x, double y, const std::string& ch, const std::string& col, bool solid = false) {
+        if (!gEngine) return;
+        float r, g, b;
+        parseColorRgb(col, r, g, b);
+        gEngine->drawRect(static_cast<float>(x * coordScale), static_cast<float>(y * coordScale),
+                          static_cast<float>(coordScale), static_cast<float>(coordScale), r, g, b, 1.0f, 0.1f);
+    }
+    inline bool tile_solid(double x, double y) { return false; }
+    inline std::string tile_at(double x, double y) { return " "; }
+    inline void map_box(double x, double y, double w, double h, const std::string& ch, const std::string& col, bool solid = true) {
+        for (double ix = x; ix < x + w; ++ix) {
+            tile(ix, y, ch, col, solid);
+            tile(ix, y + h - 1, ch, col, solid);
+        }
+        for (double iy = y; iy < y + h; ++iy) {
+            tile(x, iy, ch, col, solid);
+            tile(x + w - 1, iy, ch, col, solid);
+        }
+    }
+    inline void map_row(double x, double y, const std::string& text, const std::string& col, bool solid = true) {
+        for (size_t i = 0; i < text.size(); ++i) {
+            std::string c(1, text[i]);
+            tile(x + i, y, c, col, solid);
+        }
+    }
+    inline void camera(double cx, double cy) {}
+
+    inline void destroy(Value v) {
+        if (v.entity) v.entity->active = false;
+    }
+
+    inline int count(const std::string& type) {
+        int c = 0;
+        for (const auto& e : entities) {
+            if (e->active && e->type == type) c++;
+        }
+        return c;
+    }
+)RAW";
+
+    // Subclasses de Entidades
+    for (const auto& ent : program.entities) {
+        ss << "    struct Entity_" << ent->name << " : public BaseEntity {\n";
+        ss << "        Entity_" << ent->name << "() {\n";
+        ss << "            type = \"" << ent->name << "\";\n";
+        for (const auto& f : ent->fields) {
+            ss << "            " << f.name << " = ";
+            if (f.defaultValue) transpileExpression(*f.defaultValue, ss);
+            else ss << "0";
+            ss << ";\n";
+        }
+        ss << "        }\n";
+        ss << "    };\n";
+
+        ss << "    inline std::shared_ptr<BaseEntity> spawn_" << ent->name << "() {\n";
+        ss << "        auto e = std::make_shared<Entity_" << ent->name << ">();\n";
+        ss << "        e->id = nextEntityId++;\n";
+        ss << "        entities.push_back(e);\n";
+        ss << "        return e;\n";
+        ss << "    }\n\n";
+    }
+
+    // Variáveis Globais
+    for (const auto& g : program.globals) {
+        ss << "    static Value " << g->name << " = ";
+        if (g->initializer) transpileExpression(*g->initializer, ss);
+        else ss << "0";
+        ss << ";\n";
+    }
+    ss << "\n";
+
+    // Funções de Usuário
+    for (const auto& fn : program.functions) {
+        ss << "    Value fn_" << fn->name << "(";
+        for (size_t i = 0; i < fn->params.size(); ++i) {
+            ss << "Value " << fn->params[i];
+            if (i + 1 < fn->params.size()) ss << ", ";
+        }
+        ss << ") {\n";
+        if (fn->body) transpileBlock(*fn->body, ss, 2);
+        ss << "        return Value();\n";
+        ss << "    }\n\n";
+    }
+
+    // Tratadores de Colisão
+    for (size_t i = 0; i < program.collisionHandlers.size(); ++i) {
+        const auto& ch = program.collisionHandlers[i];
+        ss << "    void col_handler_" << i << "(std::shared_ptr<BaseEntity> " << ch->varA
+           << ", std::shared_ptr<BaseEntity> " << ch->varB << ") {\n";
+        if (ch->body) transpileBlock(*ch->body, ss, 2);
+        ss << "    }\n\n";
+    }
+
+    // Despacho de Colisão
+    ss << "    void checkCollisions() {\n";
+    ss << "        for (size_t i = 0; i < entities.size(); ++i) {\n";
+    ss << "            auto& a = entities[i];\n";
+    ss << "            if (!a->active) continue;\n";
+    ss << "            for (size_t j = i + 1; j < entities.size(); ++j) {\n";
+    ss << "                auto& b = entities[j];\n";
+    ss << "                if (!b->active) continue;\n";
+    ss << "                double dx = std::abs(a->x - b->x);\n";
+    ss << "                double dy = std::abs(a->y - b->y);\n";
+    ss << "                double limit = (coordScale == 1.0) ? 14.0 : 1.1;\n";
+    ss << "                if (dx <= limit && dy <= limit) {\n";
+    for (size_t k = 0; k < program.collisionHandlers.size(); ++k) {
+        const auto& ch = program.collisionHandlers[k];
+        ss << "                    if (a->type == \"" << ch->entityA << "\" && b->type == \"" << ch->entityB << "\") {\n";
+        ss << "                        col_handler_" << k << "(a, b);\n";
+        ss << "                    } else if (a->type == \"" << ch->entityB << "\" && b->type == \"" << ch->entityA << "\") {\n";
+        ss << "                        col_handler_" << k << "(b, a);\n";
+        ss << "                    }\n";
+    }
+    ss << "                }\n";
+    ss << "            }\n";
+    ss << "        }\n";
+    ss << "    }\n\n";
+
+    // Hooks do Ciclo de Vida
+    ss << "    void game_init() {\n";
+    if (program.initBlock) transpileBlock(*program.initBlock, ss, 2);
+    ss << "    }\n\n";
+
+    ss << "    void game_update() {\n";
+    if (program.updateBlock) transpileBlock(*program.updateBlock, ss, 2);
+    ss << "    }\n\n";
+
+    ss << "    void game_render() {\n";
+    if (program.renderBlock) transpileBlock(*program.renderBlock, ss, 2);
+    ss << "    }\n\n";
+
+    ss << "} // namespace GameRuntime\n\n";
+
+    // Função main() Nativa
+    int baseW = program.config.width > 0 ? program.config.width : 60;
+    int baseH = program.config.height > 0 ? program.config.height : 22;
+    int baseFps = program.config.fps > 0 ? program.config.fps : 60;
+
+    ss << "int main() {\n";
+    ss << "    int configW = " << baseW << ";\n";
+    ss << "    int configH = " << baseH << ";\n";
+    ss << "    int fps = " << baseFps << ";\n";
+    ss << "    std::string title = \"" << program.config.title << "\";\n\n";
+
+    ss << "    int canvasW = (configW < 120) ? (configW * 16) : configW;\n";
+    ss << "    int canvasH = (configH < 80) ? (configH * 16) : configH;\n";
+    ss << "    GameRuntime::coordScale = (configW < 120) ? 16.0 : 1.0;\n\n";
+
+    ss << "    GameForge::GL::HardwareEngineGL engine(canvasW, canvasH, fps, title);\n";
+    ss << "    GameRuntime::gEngine = &engine;\n";
+    ss << "    engine.setBloom(1.2f);\n";
+    ss << "    engine.setScanlines(0.25f);\n\n";
+
+    ss << "    GameRuntime::game_init();\n\n";
+
+    ss << "    while (!engine.shouldClose()) {\n";
+    ss << "        engine.beginFrame();\n\n";
+
+    ss << "        // 1. Atualizacao de fisica e movimento das entidades\n";
+    ss << "        for (auto& e : GameRuntime::entities) {\n";
+    ss << "            if (e->active) {\n";
+    ss << "                e->x += e->vx;\n";
+    ss << "                e->y += e->vy;\n";
+    ss << "            }\n";
+    ss << "        }\n\n";
+
+    ss << "        // 2. Deteccao e despacho de colisoes\n";
+    ss << "        GameRuntime::checkCollisions();\n\n";
+
+    ss << "        // 3. Hook de logica update do jogo\n";
+    ss << "        GameRuntime::game_update();\n\n";
+
+    ss << "        // 4. Renderizacao em lote de todas as entidades (1 Draw Call para a GPU)\n";
+    ss << "        for (auto& e : GameRuntime::entities) {\n";
+    ss << "            if (!e->active) continue;\n";
+    ss << "            float r, g, b;\n";
+    ss << "            GameRuntime::parseColorRgb(e->color, r, g, b);\n";
+    ss << "            float px = static_cast<float>(e->x * GameRuntime::coordScale);\n";
+    ss << "            float py = static_cast<float>(e->y * GameRuntime::coordScale);\n";
+    ss << "            float size = static_cast<float>(GameRuntime::coordScale);\n";
+    ss << "            float glow = (e->type == \"Laser\" || e->type == \"Bullet\" || e->type == \"Ball\") ? 2.5f : 0.2f;\n";
+    ss << "            if (e->symbol == \"@\" || e->symbol == \"O\" || e->symbol == \"o\") {\n";
+    ss << "                engine.drawCircle(px + size * 0.5f, py + size * 0.5f, size * 0.5f, r, g, b, 1.0f, glow);\n";
+    ss << "            } else {\n";
+    ss << "                engine.drawRect(px, py, size, size, r, g, b, 1.0f, glow);\n";
+    ss << "            }\n";
+    ss << "        }\n\n";
+
+    ss << "        // 5. Hook de renderizacao customizada do jogo\n";
+    ss << "        GameRuntime::game_render();\n\n";
+
+    ss << "        // 6. Mensagens de HUD\n";
+    ss << "        if (!GameRuntime::hudMessage.empty()) {\n";
+    ss << "            engine.drawText(20.0f, static_cast<float>(canvasH - 24), GameRuntime::hudMessage, 1.0f, 0.95f, 0.2f, 1.2f);\n";
+    ss << "        }\n\n";
+
+    ss << "        // 7. Submissao de 1 Draw Call, Pos-processamento GLSL e VSync Swap\n";
+    ss << "        engine.endFrame();\n\n";
+
+    ss << "        // Compactacao de entidades inativas\n";
+    ss << "        GameRuntime::entities.erase(\n";
+    ss << "            std::remove_if(GameRuntime::entities.begin(), GameRuntime::entities.end(),\n";
+    ss << "                           [](const auto& e) { return !e->active; }),\n";
+    ss << "            GameRuntime::entities.end()\n";
+    ss << "        );\n";
+    ss << "    }\n\n";
+
+    ss << "    return 0;\n";
+    ss << "}\n";
+
+    return ss.str();
+}
+
+// ============================================================================
+// Back-End Terminal Console Clássico (ANSI Escape Sequences)
+// ============================================================================
+std::string Transpiler::transpileConsole(const Program& program) {
     std::ostringstream ss;
 
     std::set<std::string> accessedMembers;
@@ -91,12 +529,11 @@ std::string Transpiler::transpileToCpp(const Program& program) {
     ss << "#include <conio.h>\n";
     ss << "#endif\n\n";
 
-    // Embed standalone mini engine
     ss << R"RAW(
 namespace GameRuntime {
     enum class Color { Default, Black, Red, Green, Yellow, Blue, Magenta, Cyan, White };
 
-    inline std::string colorToAnsi(Color c) {
+    inline const char* colorToAnsi(Color c) {
         switch (c) {
             case Color::Black:   return "\033[30m";
             case Color::Red:     return "\033[91m";
@@ -201,600 +638,401 @@ namespace GameRuntime {
         Value operator*(int i) const { return Value(num * i); }
         Value operator/(int i) const { return Value(i != 0 ? num / i : 0); }
 
+        bool operator==(double d) const { return num == d; }
+        bool operator!=(double d) const { return num != d; }
         bool operator<(double d) const { return num < d; }
         bool operator<=(double d) const { return num <= d; }
         bool operator>(double d) const { return num > d; }
         bool operator>=(double d) const { return num >= d; }
-        bool operator==(double d) const { return num == d; }
-        bool operator!=(double d) const { return num != d; }
 
-        bool operator<(int i) const { return num < i; }
-        bool operator<=(int i) const { return num <= i; }
-        bool operator>(int i) const { return num > i; }
-        bool operator>=(int i) const { return num >= i; }
-        bool operator==(int i) const { return num == i; }
-        bool operator!=(int i) const { return num != i; }
+        bool operator==(int i) const { return num == static_cast<double>(i); }
+        bool operator!=(int i) const { return num != static_cast<double>(i); }
+        bool operator<(int i) const { return num < static_cast<double>(i); }
+        bool operator<=(int i) const { return num <= static_cast<double>(i); }
+        bool operator>(int i) const { return num > static_cast<double>(i); }
+        bool operator>=(int i) const { return num >= static_cast<double>(i); }
 
-        friend Value operator+(double d, const Value& v) { return Value(d + v.num); }
-        friend Value operator-(double d, const Value& v) { return Value(d - v.num); }
-        friend Value operator*(double d, const Value& v) { return Value(d * v.num); }
-        friend Value operator/(double d, const Value& v) { return Value(v.num != 0 ? d / v.num : 0); }
-        friend Value operator+(int i, const Value& v) { return Value(i + v.num); }
-        friend Value operator-(int i, const Value& v) { return Value(i - v.num); }
-        friend Value operator*(int i, const Value& v) { return Value(i * v.num); }
-        friend Value operator/(int i, const Value& v) { return Value(v.num != 0 ? i / v.num : 0); }
-
-        friend bool operator<(double d, const Value& v) { return d < v.num; }
-        friend bool operator<=(double d, const Value& v) { return d <= v.num; }
-        friend bool operator>(double d, const Value& v) { return d > v.num; }
-        friend bool operator>=(double d, const Value& v) { return d >= v.num; }
-        friend bool operator==(double d, const Value& v) { return d == v.num; }
-        friend bool operator!=(double d, const Value& v) { return d != v.num; }
-
-        friend bool operator<(int i, const Value& v) { return i < v.num; }
-        friend bool operator<=(int i, const Value& v) { return i <= v.num; }
-        friend bool operator>(int i, const Value& v) { return i > v.num; }
-        friend bool operator>=(int i, const Value& v) { return i >= v.num; }
-        friend bool operator==(int i, const Value& v) { return i == v.num; }
-        friend bool operator!=(int i, const Value& v) { return i != v.num; }
+        bool operator==(const char* s) const { return str == s; }
+        bool operator!=(const char* s) const { return str != s; }
+        bool operator==(const std::string& s) const { return str == s; }
+        bool operator!=(const std::string& s) const { return str != s; }
+        Value operator+(const char* s) const { return Value(str + s); }
+        Value operator+(const std::string& s) const { return Value(str + s); }
     };
 
-    class Engine {
-    public:
-        int width;
-        int height;
-        int targetFps;
-        std::string title;
-        bool exitRequested = false;
-        std::vector<Pixel> backBuffer;
-        int mapWidth = 80;
-        int mapHeight = 25;
-        std::vector<Tile> tiles;
-        int cameraX = 0;
-        int cameraY = 0;
-        std::string currentMessage;
-        Color messageColor = Color::Yellow;
-        uint32_t nextId = 1;
-        std::unordered_map<std::string, bool> keysDown;
-        std::unordered_map<std::string, bool> keysPressed;
-        std::vector<std::shared_ptr<BaseEntity>> entities;
-        std::chrono::steady_clock::time_point lastFrameTime;
-        std::string frameBuffer;
+    static std::vector<std::shared_ptr<BaseEntity>> entities;
+    static uint32_t nextEntityId = 1;
+    static int screenWidth = 80;
+    static int screenHeight = 25;
+    static int targetFps = 30;
+    static std::string gameTitle = "Game";
+    static std::vector<std::vector<Pixel>> backBuffer;
+    static std::vector<std::vector<Pixel>> frontBuffer;
+    static std::vector<std::vector<Tile>> tiles;
+    static double camX = 0, camY = 0;
+    static std::string currentMessage = "";
+    static Color messageColor = Color::Yellow;
+    static std::string renderCache;
 
-        struct AudioReq { int freq; int dur; };
-        std::queue<AudioReq> audioQueue;
-        std::mutex audioMutex;
-        std::condition_variable audioCv;
-        std::thread audioThread;
-        std::atomic<bool> audioRunning{true};
+    struct AudioRequest { int freq; int duration; };
+    static std::queue<AudioRequest> audioQueue;
+    static std::mutex audioMutex;
+    static std::condition_variable audioCv;
+    static std::atomic<bool> audioRunning{true};
+    static std::thread audioWorker;
 
-        #ifdef _WIN32
-        HANDLE hConsole = nullptr;
-        DWORD originalMode = 0;
-        #endif
-
-        Engine(int w, int h, int fps, std::string t) : width(w), height(h), targetFps(fps), title(t) {
-            backBuffer.resize(w * h, Pixel{' ', Color::Default});
-            mapWidth = w;
-            mapHeight = h;
-            tiles.resize(w * h, Tile{' ', Color::Default, false});
-            frameBuffer.reserve(w * h * 12);
-            lastFrameTime = std::chrono::steady_clock::now();
-
-            audioThread = std::thread([this]() {
-                while (this->audioRunning) {
-                    AudioReq req{0, 0};
-                    {
-                        std::unique_lock<std::mutex> lock(this->audioMutex);
-                        this->audioCv.wait(lock, [this]() {
-                            return !this->audioRunning || !this->audioQueue.empty();
-                        });
-                        if (!this->audioRunning && this->audioQueue.empty()) break;
-                        req = this->audioQueue.front();
-                        this->audioQueue.pop();
-                    }
-                    #ifdef _WIN32
-                    if (req.freq > 0 && req.dur > 0) Beep(req.freq, std::min(req.dur, 40));
-                    #endif
-                }
-            });
-        }
-
-        ~Engine() {
-            audioRunning = false;
-            audioCv.notify_all();
-            if (audioThread.joinable()) audioThread.join();
-        }
-
-        void setMapSize(int w, int h) {
-            mapWidth = w;
-            mapHeight = h;
-            tiles.assign(w * h, Tile{' ', Color::Default, false});
-        }
-
-        void setTile(int x, int y, char ch, Color col, bool solid) {
-            if (x >= 0 && x < mapWidth && y >= 0 && y < mapHeight) {
-                tiles[y * mapWidth + x] = Tile{ch, col, solid};
-            }
-        }
-
-        bool isTileSolid(int x, int y) const {
-            if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) return true;
-            return tiles[y * mapWidth + x].solid;
-        }
-
-        char getTileChar(int x, int y) const {
-            if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) return ' ';
-            return tiles[y * mapWidth + x].ch;
-        }
-
-        void fillMapBox(int x, int y, int w, int h, char ch, Color col, bool solid) {
-            for (int cy = y; cy < y + h; ++cy) {
-                for (int cx = x; cx < x + w; ++cx) {
-                    if (cy == y || cy == y + h - 1 || cx == x || cx == x + w - 1) {
-                        setTile(cx, cy, ch, col, solid);
-                    }
-                }
-            }
-        }
-
-        void setMapRow(int x, int y, const std::string& row, Color col, bool solid) {
-            for (size_t i = 0; i < row.size(); ++i) {
-                setTile(x + (int)i, y, row[i], col, solid);
-            }
-        }
-
-        void setCamera(int cx, int cy) {
-            cameraX = cx;
-            cameraY = cy;
-        }
-
-        void setMessage(const std::string& msg, Color col = Color::Yellow) {
-            currentMessage = msg;
-            messageColor = col;
-        }
-
-        void initTerminal() {
-            #ifdef _WIN32
-            hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-            if (hConsole != INVALID_HANDLE_VALUE) {
-                GetConsoleMode(hConsole, &originalMode);
-                SetConsoleMode(hConsole, originalMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-                CONSOLE_CURSOR_INFO ci;
-                GetConsoleCursorInfo(hConsole, &ci);
-                ci.bVisible = FALSE;
-                SetConsoleCursorInfo(hConsole, &ci);
-            }
-            #endif
-            std::cout << "\033]0;" << title << "\007\033[2J\033[H" << std::flush;
-        }
-
-        void resetTerminal() {
-            #ifdef _WIN32
-            if (hConsole != INVALID_HANDLE_VALUE) {
-                SetConsoleMode(hConsole, originalMode);
-                CONSOLE_CURSOR_INFO ci;
-                GetConsoleCursorInfo(hConsole, &ci);
-                ci.bVisible = TRUE;
-                SetConsoleCursorInfo(hConsole, &ci);
-            }
-            #endif
-            std::cout << "\033[0m\033[?25h\n" << std::flush;
-        }
-
-        void clear() {
-            for (auto& p : backBuffer) p = Pixel{' ', Color::Default};
-        }
-
-        void setPixel(int x, int y, char ch, Color col) {
-            if (x >= 0 && x < width && y >= 0 && y < height) {
-                backBuffer[y * width + x] = Pixel{ch, col};
-            }
-        }
-
-        void drawText(int x, int y, const std::string& text, Color col) {
-            for (size_t i = 0; i < text.size(); ++i) setPixel(x + (int)i, y, text[i], col);
-        }
-
-        void drawBox(int x, int y, int w, int h, Color col) {
-            for (int i = 0; i < w; ++i) { setPixel(x + i, y, '-', col); setPixel(x + i, y + h - 1, '-', col); }
-            for (int i = 0; i < h; ++i) { setPixel(x, y + i, '|', col); setPixel(x + w - 1, y + i, '|', col); }
-            setPixel(x, y, '+', col); setPixel(x + w - 1, y, '+', col);
-            setPixel(x, y + h - 1, '+', col); setPixel(x + w - 1, y + h - 1, '+', col);
-        }
-
-        void present() {
-            frameBuffer.clear();
-            frameBuffer += "\033[H";
-            Color cur = Color::Default;
-            for (int y = 0; y < height; ++y) {
-                for (int x = 0; x < width; ++x) {
-                    const auto& p = backBuffer[y * width + x];
-                    if (p.color != cur) { frameBuffer += colorToAnsi(p.color); cur = p.color; }
-                    frameBuffer += p.ch;
-                }
-                frameBuffer += "\n";
-            }
-            if (cur != Color::Default) frameBuffer += "\033[0m";
-            std::cout << frameBuffer << std::flush;
-        }
-
-        void pollInput() {
-            keysPressed.clear();
-            #ifdef _WIN32
-            while (_kbhit()) {
-                int ch = _getch();
-                std::string k;
-                if (ch == 224 || ch == 0) {
-                    int ext = _getch();
-                    if (ext == 72) k = "UP";
-                    else if (ext == 80) k = "DOWN";
-                    else if (ext == 75) k = "LEFT";
-                    else if (ext == 77) k = "RIGHT";
-                } else if (ch == 27 || ch == 'q' || ch == 'Q') {
-                    exitRequested = true;
-                } else if (ch == 32) {
-                    k = "SPACE";
-                } else {
-                    k = std::string(1, (char)toupper(ch));
-                }
-                if (!k.empty()) { keysDown[k] = true; keysPressed[k] = true; }
-            }
-            auto checkAsync = [&](int vk, const std::string& name) {
-                if (GetAsyncKeyState(vk) & 0x8000) keysDown[name] = true;
-                else keysDown[name] = false;
-            };
-            checkAsync(VK_LEFT, "LEFT"); checkAsync(VK_RIGHT, "RIGHT");
-            checkAsync(VK_UP, "UP"); checkAsync(VK_DOWN, "DOWN");
-            checkAsync(VK_SPACE, "SPACE");
-            if (keysDown["A"]) keysDown["LEFT"] = true;
-            if (keysDown["D"]) keysDown["RIGHT"] = true;
-            if (keysDown["W"]) keysDown["UP"] = true;
-            if (keysDown["S"]) keysDown["DOWN"] = true;
-            #endif
-        }
-
-        bool isKeyDown(const std::string& key) const {
-            auto it = keysDown.find(key); return it != keysDown.end() && it->second;
-        }
-
-        bool isKeyPressed(const std::string& key) const {
-            auto it = keysPressed.find(key); return it != keysPressed.end() && it->second;
-        }
-
-        void playBeep(int freq, int dur) {
-            if (freq > 0 && dur > 0) {
+    inline void startAudioWorker() {
+        audioWorker = std::thread([]() {
+            while (audioRunning) {
+                AudioRequest req{0, 0};
                 {
-                    std::lock_guard<std::mutex> lock(audioMutex);
-                    audioQueue.push({freq, dur});
+                    std::unique_lock<std::mutex> lock(audioMutex);
+                    audioCv.wait(lock, []() { return !audioQueue.empty() || !audioRunning; });
+                    if (!audioRunning && audioQueue.empty()) break;
+                    req = audioQueue.front();
+                    audioQueue.pop();
                 }
-                audioCv.notify_one();
+#ifdef _WIN32
+                if (req.freq > 0 && req.duration > 0) {
+                    Beep(req.freq, req.duration);
+                }
+#endif
+            }
+        });
+    }
+
+    inline void stopAudioWorker() {
+        audioRunning = false;
+        audioCv.notify_all();
+        if (audioWorker.joinable()) {
+            audioWorker.join();
+        }
+    }
+
+    inline void beep(int freq = 440, int duration = 50) {
+        {
+            std::lock_guard<std::mutex> lock(audioMutex);
+            audioQueue.push({freq, duration});
+        }
+        audioCv.notify_one();
+    }
+
+    inline void initEngine(int w, int h, int fps, const std::string& title) {
+        screenWidth = w; screenHeight = h; targetFps = fps; gameTitle = title;
+        backBuffer.assign(h, std::vector<Pixel>(w, Pixel{' ', Color::Default}));
+        frontBuffer.assign(h, std::vector<Pixel>(w, Pixel{' ', Color::Default}));
+        tiles.assign(100, std::vector<Tile>(200, Tile{' ', Color::Default, false}));
+        renderCache.reserve(w * h * 16);
+        startAudioWorker();
+#ifdef _WIN32
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD mode = 0;
+        GetConsoleMode(hOut, &mode);
+        SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        CONSOLE_CURSOR_INFO ci;
+        GetConsoleCursorInfo(hOut, &ci);
+        ci.bVisible = FALSE;
+        SetConsoleCursorInfo(hOut, &ci);
+        SetConsoleTitleA(title.c_str());
+#endif
+        std::cout << "\033[2J\033[H";
+    }
+
+    inline void clearBuffer() {
+        for (int y = 0; y < screenHeight; ++y)
+            for (int x = 0; x < screenWidth; ++x)
+                backBuffer[y][x] = Pixel{' ', Color::Default};
+    }
+
+    inline void setPixel(int x, int y, char ch, Color color) {
+        if (x >= 0 && x < screenWidth && y >= 0 && y < screenHeight)
+            backBuffer[y][x] = Pixel{ch, color};
+    }
+
+    inline void tile(double x, double y, const std::string& ch, const std::string& colorName, bool solid = false) {
+        int ix = static_cast<int>(x), iy = static_cast<int>(y);
+        if (iy >= 0 && iy < (int)tiles.size() && ix >= 0 && ix < (int)tiles[0].size()) {
+            char c = ch.empty() ? ' ' : ch[0];
+            tiles[iy][ix] = Tile{c, parseColor(colorName), solid};
+        }
+    }
+
+    inline bool tile_solid(double x, double y) {
+        int ix = static_cast<int>(x), iy = static_cast<int>(y);
+        if (iy >= 0 && iy < (int)tiles.size() && ix >= 0 && ix < (int)tiles[0].size())
+            return tiles[iy][ix].solid;
+        return false;
+    }
+
+    inline std::string tile_at(double x, double y) {
+        int ix = static_cast<int>(x), iy = static_cast<int>(y);
+        if (iy >= 0 && iy < (int)tiles.size() && ix >= 0 && ix < (int)tiles[0].size())
+            return std::string(1, tiles[iy][ix].ch);
+        return " ";
+    }
+
+    inline void map_box(double x, double y, double w, double h, const std::string& ch, const std::string& col, bool solid = true) {
+        int ix = (int)x, iy = (int)y, iw = (int)w, ih = (int)h;
+        for (int r = iy; r < iy + ih; ++r) {
+            for (int c = ix; c < ix + iw; ++c) {
+                if (r == iy || r == iy + ih - 1 || c == ix || c == ix + iw - 1)
+                    tile(c, r, ch, col, solid);
             }
         }
+    }
 
-        int getRandomInt(int minVal, int maxVal) {
-            static std::mt19937 rng(42);
-            if (minVal > maxVal) std::swap(minVal, maxVal);
-            std::uniform_int_distribution<int> dist(minVal, maxVal);
-            return dist(rng);
+    inline void map_row(double x, double y, const std::string& str, const std::string& col, bool solid = false) {
+        int ix = (int)x, iy = (int)y;
+        for (size_t i = 0; i < str.size(); ++i) {
+            char c = str[i];
+            if (c != ' ') tile(ix + (int)i, iy, std::string(1, c), col, solid);
         }
+    }
 
-        void syncFrame() {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFrameTime).count();
-            long long duration = 1000 / targetFps;
-            if (elapsed < duration) std::this_thread::sleep_for(std::chrono::milliseconds(duration - elapsed));
-            lastFrameTime = std::chrono::steady_clock::now();
+    inline void camera(double cx, double cy) { camX = cx; camY = cy; }
+    inline void msg(const std::string& text, const std::string& col = "yellow") {
+        currentMessage = text;
+        messageColor = parseColor(col);
+    }
+    inline void dialog(const std::string& text, const std::string& col = "white") { msg(text, col); }
+
+    inline void present() {
+        int viewStartX = static_cast<int>(camX) - screenWidth / 2;
+        int viewStartY = static_cast<int>(camY) - screenHeight / 2;
+        int maxTileY = (int)tiles.size();
+        int maxTileX = (int)tiles[0].size();
+        for (int y = 0; y < screenHeight; ++y) {
+            int ty = viewStartY + y;
+            for (int x = 0; x < screenWidth; ++x) {
+                int tx = viewStartX + x;
+                if (ty >= 0 && ty < maxTileY && tx >= 0 && tx < maxTileX) {
+                    const auto& t = tiles[ty][tx];
+                    if (t.ch != ' ') backBuffer[y][x] = Pixel{t.ch, t.color};
+                }
+            }
         }
-
-        void destroy(std::shared_ptr<BaseEntity> ent) {
-            if (ent) ent->active = false;
+        for (const auto& ent : entities) {
+            if (!ent->active) continue;
+            int rx = static_cast<int>(ent->x) - viewStartX;
+            int ry = static_cast<int>(ent->y) - viewStartY;
+            if (rx >= 0 && rx < screenWidth && ry >= 0 && ry < screenHeight) {
+                char ch = ent->symbol.empty() ? '?' : ent->symbol[0];
+                backBuffer[ry][rx] = Pixel{ch, parseColor(ent->color)};
+            }
         }
-    };
-} // namespace GameRuntime
+        if (!currentMessage.empty()) {
+            int msgY = screenHeight - 1;
+            int msgX = 1;
+            for (size_t i = 0; i < currentMessage.size() && (msgX + (int)i) < screenWidth - 1; ++i) {
+                backBuffer[msgY][msgX + (int)i] = Pixel{currentMessage[i], messageColor};
+            }
+        }
+        renderCache.clear();
+        renderCache.append("\033[H");
+        Color lastColor = Color::Default;
+        for (int y = 0; y < screenHeight; ++y) {
+            for (int x = 0; x < screenWidth; ++x) {
+                const auto& p = backBuffer[y][x];
+                if (p.color != lastColor) {
+                    renderCache.append(colorToAnsi(p.color));
+                    lastColor = p.color;
+                }
+                renderCache.push_back(p.ch);
+            }
+            if (y < screenHeight - 1) renderCache.push_back('\n');
+        }
+        renderCache.append("\033[0m");
+        std::cout << renderCache << std::flush;
+        frontBuffer = backBuffer;
+    }
 
+    inline bool key(const std::string& k) {
+#ifdef _WIN32
+        if (k == "left") return (GetAsyncKeyState(VK_LEFT) & 0x8000) || (GetAsyncKeyState('A') & 0x8000);
+        if (k == "right") return (GetAsyncKeyState(VK_RIGHT) & 0x8000) || (GetAsyncKeyState('D') & 0x8000);
+        if (k == "up") return (GetAsyncKeyState(VK_UP) & 0x8000) || (GetAsyncKeyState('W') & 0x8000);
+        if (k == "down") return (GetAsyncKeyState(VK_DOWN) & 0x8000) || (GetAsyncKeyState('S') & 0x8000);
+        if (k == "space") return (GetAsyncKeyState(VK_SPACE) & 0x8000);
+        if (k == "q") return (GetAsyncKeyState('Q') & 0x8000) || (GetAsyncKeyState(VK_ESCAPE) & 0x8000);
+        if (k == "enter") return (GetAsyncKeyState(VK_RETURN) & 0x8000);
+#endif
+        return false;
+    }
+    inline bool key_down(const std::string& k) { return key(k); }
+    inline bool key_pressed(const std::string& k) { return key(k); }
+
+    inline double random(double min, double max) {
+        static std::mt19937 rng(1337);
+        std::uniform_real_distribution<double> dist(min, max);
+        return dist(rng);
+    }
+    inline double rnd(double min, double max) { return random(min, max); }
+
+    inline void destroy(Value v) {
+        if (v.entity) v.entity->active = false;
+    }
+
+    inline int count(const std::string& type) {
+        int c = 0;
+        for (const auto& e : entities) {
+            if (e->active && e->type == type) c++;
+        }
+        return c;
+    }
 )RAW";
 
-    // Global engine instance
-    ss << "GameRuntime::Engine engine("
-       << program.config.width << ", "
-       << program.config.height << ", "
-       << program.config.fps << ", \""
-       << program.config.title << "\");\n\n";
-
-    // Entity Struct Definitions
-    for (const auto& entity : program.entities) {
-        ss << "struct Entity_" << entity->name << " : public GameRuntime::BaseEntity {\n";
-        for (const auto& field : entity->fields) {
-            bool isBase = (field.name == "x" || field.name == "y" || field.name == "vx" || field.name == "vy" ||
-                           field.name == "symbol" || field.name == "color");
-            if (!isBase) {
-                bool isStr = false;
-                if (field.defaultValue) {
-                    if (auto lit = dynamic_cast<LiteralExpr*>(field.defaultValue.get())) {
-                        if (lit->kind == LiteralExpr::Kind::String) isStr = true;
-                    }
-                }
-                if (isStr) ss << "    std::string " << field.name << " = ";
-                else ss << "    double " << field.name << " = ";
-                if (field.defaultValue) transpileExpression(*field.defaultValue, ss);
-                else ss << "0.0";
-                ss << ";\n";
-            }
+    for (const auto& ent : program.entities) {
+        ss << "    struct Entity_" << ent->name << " : public BaseEntity {\n";
+        ss << "        Entity_" << ent->name << "() {\n";
+        ss << "            type = \"" << ent->name << "\";\n";
+        for (const auto& f : ent->fields) {
+            ss << "            " << f.name << " = ";
+            if (f.defaultValue) transpileExpression(*f.defaultValue, ss);
+            else ss << "0";
+            ss << ";\n";
         }
-        ss << "    Entity_" << entity->name << "() {\n";
-        ss << "        type = \"" << entity->name << "\";\n";
-        for (const auto& field : entity->fields) {
-            bool isBase = (field.name == "x" || field.name == "y" || field.name == "vx" || field.name == "vy" ||
-                           field.name == "symbol" || field.name == "color");
-            if (isBase && field.defaultValue) {
-                ss << "        " << field.name << " = ";
-                transpileExpression(*field.defaultValue, ss);
-                ss << ";\n";
-            }
-        }
-        ss << "    }\n";
-        ss << "};\n\n";
-    }
-
-    // Global entity lists
-    for (const auto& entity : program.entities) {
-        ss << "std::vector<std::shared_ptr<Entity_" << entity->name << ">> entities_" << entity->name << ";\n";
-    }
-    ss << "\n";
-
-    // Spawn helper template com Reciclagem Inteligente de Memoria
-    for (const auto& entity : program.entities) {
-        ss << "std::shared_ptr<Entity_" << entity->name << "> spawn_" << entity->name << "() {\n";
-        ss << "    for (auto& recycled : entities_" << entity->name << ") {\n";
-        ss << "        if (!recycled->active) {\n";
-        ss << "            recycled->active = true;\n";
-        ss << "            *recycled = Entity_" << entity->name << "();\n";
-        ss << "            recycled->id = engine.nextId++;\n";
-        ss << "            return recycled;\n";
         ss << "        }\n";
-        ss << "    }\n";
-        ss << "    auto e = std::make_shared<Entity_" << entity->name << ">();\n";
-        ss << "    e->id = engine.nextId++;\n";
-        ss << "    entities_" << entity->name << ".push_back(e);\n";
-        ss << "    engine.entities.push_back(e);\n";
-        ss << "    return e;\n";
-        ss << "}\n\n";
+        ss << "    };\n";
+
+        ss << "    inline std::shared_ptr<BaseEntity> spawn_" << ent->name << "() {\n";
+        ss << "        auto e = std::make_shared<Entity_" << ent->name << ">();\n";
+        ss << "        e->id = nextEntityId++;\n";
+        ss << "        entities.push_back(e);\n";
+        ss << "        return e;\n";
+        ss << "    }\n\n";
     }
 
-    // Global variables
     for (const auto& g : program.globals) {
-        ss << "GameRuntime::Value " << g->name << " = ";
-        if (g->initializer) {
-            transpileExpression(*g->initializer, ss);
-        } else {
-            ss << "0.0";
-        }
+        ss << "    static Value " << g->name << " = ";
+        if (g->initializer) transpileExpression(*g->initializer, ss);
+        else ss << "0";
         ss << ";\n";
     }
     ss << "\n";
 
-    // Helper functions
-    ss << "inline bool key(const std::string& k) { return engine.isKeyDown(k); }\n";
-    ss << "inline bool key_down(const std::string& k) { return engine.isKeyDown(k); }\n";
-    ss << "inline bool key_pressed(const std::string& k) { return engine.isKeyPressed(k); }\n";
-    ss << "inline void beep(int f, int d) { engine.playBeep(f, d); }\n";
-    ss << "inline int random(int minVal, int maxVal) { return engine.getRandomInt(minVal, maxVal); }\n";
-    ss << "inline void destroy(std::shared_ptr<GameRuntime::BaseEntity> e) { engine.destroy(e); }\n";
-    ss << "inline void destroy(const GameRuntime::Value& v) { if (v.entity) engine.destroy(v.entity); }\n";
-    ss << "inline int count(const std::string& type) {\n";
-    ss << "    int cnt = 0;\n";
-    ss << "    for (const auto& e : engine.entities) {\n";
-    ss << "        if (e->active && e->type == type) cnt++;\n";
-    ss << "    }\n";
-    ss << "    return cnt;\n";
-    ss << "}\n\n";
-
-    // RPG Map helpers
-    ss << "inline void tile(const GameRuntime::Value& x, const GameRuntime::Value& y, const GameRuntime::Value& ch, const GameRuntime::Value& col = \"white\", const GameRuntime::Value& solid = 0.0) {\n";
-    ss << "    char c = ch.str.empty() ? ' ' : ch.str[0];\n";
-    ss << "    engine.setTile((int)x.num, (int)y.num, c, GameRuntime::parseColor(col.str), solid.num != 0.0);\n";
-    ss << "}\n";
-    ss << "inline GameRuntime::Value tile_solid(const GameRuntime::Value& x, const GameRuntime::Value& y) {\n";
-    ss << "    return GameRuntime::Value(engine.isTileSolid((int)x.num, (int)y.num) ? 1.0 : 0.0);\n";
-    ss << "}\n";
-    ss << "inline GameRuntime::Value tile_at(const GameRuntime::Value& x, const GameRuntime::Value& y) {\n";
-    ss << "    return GameRuntime::Value(std::string(1, engine.getTileChar((int)x.num, (int)y.num)));\n";
-    ss << "}\n";
-    ss << "inline void map_box(const GameRuntime::Value& x, const GameRuntime::Value& y, const GameRuntime::Value& w, const GameRuntime::Value& h, const GameRuntime::Value& ch = \"#\", const GameRuntime::Value& col = \"gray\", const GameRuntime::Value& solid = 1.0) {\n";
-    ss << "    char c = ch.str.empty() ? '#' : ch.str[0];\n";
-    ss << "    engine.fillMapBox((int)x.num, (int)y.num, (int)w.num, (int)h.num, c, GameRuntime::parseColor(col.str), solid.num != 0.0);\n";
-    ss << "}\n";
-    ss << "inline void map_row(const GameRuntime::Value& x, const GameRuntime::Value& y, const GameRuntime::Value& row, const GameRuntime::Value& col = \"white\", const GameRuntime::Value& solid = 0.0) {\n";
-    ss << "    engine.setMapRow((int)x.num, (int)y.num, row.str, GameRuntime::parseColor(col.str), solid.num != 0.0);\n";
-    ss << "}\n";
-    ss << "inline void camera(const GameRuntime::Value& cx, const GameRuntime::Value& cy) {\n";
-    ss << "    engine.setCamera((int)cx.num, (int)cy.num);\n";
-    ss << "}\n";
-    ss << "inline void msg(const GameRuntime::Value& m, const GameRuntime::Value& col = \"yellow\") {\n";
-    ss << "    engine.setMessage(m.str.empty() ? std::to_string((int)m.num) : m.str, GameRuntime::parseColor(col.str));\n";
-    ss << "}\n";
-    ss << "inline void dialog(const GameRuntime::Value& m, const GameRuntime::Value& col = \"yellow\") {\n";
-    ss << "    msg(m, col);\n";
-    ss << "}\n\n";
-
-    // Functions
     for (const auto& fn : program.functions) {
-        ss << "GameRuntime::Value fn_" << fn->name << "(";
+        ss << "    Value fn_" << fn->name << "(";
         for (size_t i = 0; i < fn->params.size(); ++i) {
-            ss << "GameRuntime::Value " << fn->params[i] << (i + 1 < fn->params.size() ? ", " : "");
+            ss << "Value " << fn->params[i];
+            if (i + 1 < fn->params.size()) ss << ", ";
         }
         ss << ") {\n";
-        if (fn->body) {
-            for (const auto& stmt : fn->body->statements) {
-                transpileStatement(*stmt, ss, 1);
-            }
-        }
-        ss << "    return 0.0;\n}\n\n";
+        if (fn->body) transpileBlock(*fn->body, ss, 2);
+        ss << "        return Value();\n";
+        ss << "    }\n\n";
     }
 
-    // Function fallback stubs for undefined calls
-    std::unordered_set<std::string> declaredFns;
-    for (const auto& fn : program.functions) declaredFns.insert(fn->name);
-    declaredFns.insert("key"); declaredFns.insert("key_down"); declaredFns.insert("key_pressed");
-    declaredFns.insert("beep"); declaredFns.insert("random"); declaredFns.insert("destroy");
-    declaredFns.insert("count");
-    declaredFns.insert("tile"); declaredFns.insert("tile_solid"); declaredFns.insert("tile_at");
-    declaredFns.insert("map_box"); declaredFns.insert("map_row"); declaredFns.insert("camera");
-    declaredFns.insert("msg"); declaredFns.insert("dialog");
-
-    for (const auto& call : calledFunctions) {
-        if (declaredFns.find(call) == declaredFns.end()) {
-            ss << "template<typename... Args> inline GameRuntime::Value fn_" << call << "(Args&&...) { return 0.0; }\n";
-        }
+    for (size_t i = 0; i < program.collisionHandlers.size(); ++i) {
+        const auto& ch = program.collisionHandlers[i];
+        ss << "    void col_handler_" << i << "(std::shared_ptr<BaseEntity> " << ch->varA
+           << ", std::shared_ptr<BaseEntity> " << ch->varB << ") {\n";
+        if (ch->body) transpileBlock(*ch->body, ss, 2);
+        ss << "    }\n\n";
     }
-    ss << "\n";
 
-    // Init function
-    ss << "void game_init() {\n";
-    if (program.initBlock) {
-        for (const auto& stmt : program.initBlock->statements) {
-            transpileStatement(*stmt, ss, 1);
-        }
+    ss << "    void checkCollisions() {\n";
+    ss << "        for (size_t i = 0; i < entities.size(); ++i) {\n";
+    ss << "            auto& a = entities[i];\n";
+    ss << "            if (!a->active) continue;\n";
+    ss << "            for (size_t j = i + 1; j < entities.size(); ++j) {\n";
+    ss << "                auto& b = entities[j];\n";
+    ss << "                if (!b->active) continue;\n";
+    ss << "                if (static_cast<int>(a->x) == static_cast<int>(b->x) &&\n";
+    ss << "                    static_cast<int>(a->y) == static_cast<int>(b->y)) {\n";
+    for (size_t k = 0; k < program.collisionHandlers.size(); ++k) {
+        const auto& ch = program.collisionHandlers[k];
+        ss << "                    if (a->type == \"" << ch->entityA << "\" && b->type == \"" << ch->entityB << "\") {\n";
+        ss << "                        col_handler_" << k << "(a, b);\n";
+        ss << "                    } else if (a->type == \"" << ch->entityB << "\" && b->type == \"" << ch->entityA << "\") {\n";
+        ss << "                        col_handler_" << k << "(b, a);\n";
+        ss << "                    }\n";
     }
-    ss << "}\n\n";
-
-    // Update function
-    ss << "void game_update() {\n";
-    ss << "    for (auto& e : engine.entities) {\n";
-    ss << "        if (!e->active) continue;\n";
-    ss << "        e->x += e->vx;\n";
-    ss << "        e->y += e->vy;\n";
-    ss << "        if (e->type == \"Bullet\" && (e->y < 1 || e->y >= engine.height - 1)) e->active = false;\n";
-    ss << "    }\n";
-    if (program.updateBlock) {
-        for (const auto& stmt : program.updateBlock->statements) {
-            transpileStatement(*stmt, ss, 1);
-        }
-    }
-    ss << "}\n\n";
-
-    // Collisions
-    ss << "void game_collisions() {\n";
-    for (const auto& ch : program.collisionHandlers) {
-        ss << "    // Collision: " << ch->entityA << " vs " << ch->entityB << "\n";
-        ss << "    for (auto& " << ch->varA << "_ptr : entities_" << ch->entityA << ") {\n";
-        ss << "        if (!" << ch->varA << "_ptr->active) continue;\n";
-        ss << "        for (auto& " << ch->varB << "_ptr : entities_" << ch->entityB << ") {\n";
-        ss << "            if (!" << ch->varB << "_ptr->active) continue;\n";
-        ss << "            if (std::round(" << ch->varA << "_ptr->x) == std::round(" << ch->varB << "_ptr->x) &&\n";
-        ss << "                std::round(" << ch->varA << "_ptr->y) == std::round(" << ch->varB << "_ptr->y)) {\n";
-        ss << "                GameRuntime::Value " << ch->varA << "(" << ch->varA << "_ptr);\n";
-        ss << "                GameRuntime::Value " << ch->varB << "(" << ch->varB << "_ptr);\n";
-        if (ch->body) {
-            for (const auto& stmt : ch->body->statements) {
-                transpileStatement(*stmt, ss, 4);
-            }
-        }
-        ss << "            }\n";
-        ss << "        }\n";
-        ss << "    }\n";
-    }
-    ss << "}\n\n";
-
-    // Render function
-    ss << "void game_render() {\n";
-    ss << "    engine.clear();\n";
-    ss << "    for (int sy = 1; sy < engine.height - 1; ++sy) {\n";
-    ss << "        int my = sy + engine.cameraY;\n";
-    ss << "        if (my < 0 || my >= engine.mapHeight) continue;\n";
-    ss << "        for (int sx = 1; sx < engine.width - 1; ++sx) {\n";
-    ss << "            int mx = sx + engine.cameraX;\n";
-    ss << "            if (mx < 0 || mx >= engine.mapWidth) continue;\n";
-    ss << "            const auto& t = engine.tiles[my * engine.mapWidth + mx];\n";
-    ss << "            if (t.ch != ' ' && t.ch != '\\0') engine.setPixel(sx, sy, t.ch, t.color);\n";
+    ss << "                }\n";
+    ss << "            }\n";
     ss << "        }\n";
-    ss << "    }\n";
-    ss << "    engine.drawBox(0, 0, engine.width, engine.height, GameRuntime::Color::Blue);\n";
-    ss << "    engine.drawText(2, 0, \" " << program.config.title << " \", GameRuntime::Color::Cyan);\n";
-    bool hasScore = false;
-    bool hasLives = false;
-    bool hasHp = false;
-    bool hasGold = false;
-    for (const auto& g : program.globals) {
-        if (g->name == "score") hasScore = true;
-        if (g->name == "lives") hasLives = true;
-        if (g->name == "hp") hasHp = true;
-        if (g->name == "gold") hasGold = true;
-    }
-    if (hasScore) {
-        ss << "    engine.drawText(engine.width - 16, 0, \"Score: \" + std::to_string((int)score), GameRuntime::Color::Yellow);\n";
-    }
-    if (hasLives) {
-        ss << "    engine.drawText(2, engine.height - 1, \"Lives: \" + std::to_string((int)lives), GameRuntime::Color::Green);\n";
-    }
-    if (hasHp) {
-        ss << "    engine.drawText(" << (hasLives ? 14 : 2) << ", engine.height - 1, \"HP: \" + std::to_string((int)hp), GameRuntime::Color::Red);\n";
-    }
-    if (hasGold) {
-        ss << "    engine.drawText(26, engine.height - 1, \"Ouro: \" + std::to_string((int)gold), GameRuntime::Color::Yellow);\n";
-    }
+    ss << "    }\n\n";
 
-    // Draw entities (with camera offset)
-    for (const auto& entity : program.entities) {
-        ss << "    for (auto& e : entities_" << entity->name << ") {\n";
-        ss << "        if (e->active) {\n";
-        ss << "            int ex = (int)std::round(e->x) - engine.cameraX;\n";
-        ss << "            int ey = (int)std::round(e->y) - engine.cameraY;\n";
-        ss << "            if (ex > 0 && ex < engine.width - 1 && ey > 0 && ey < engine.height - 1) {\n";
-        ss << "                engine.setPixel(ex, ey, e->symbol.empty() ? '?' : e->symbol[0], GameRuntime::parseColor(e->color));\n";
-        ss << "            }\n";
-        ss << "        }\n";
-        ss << "    }\n";
-    }
+    ss << "    void game_init() {\n";
+    if (program.initBlock) transpileBlock(*program.initBlock, ss, 2);
+    ss << "    }\n\n";
 
-    if (program.renderBlock) {
-        for (const auto& stmt : program.renderBlock->statements) {
-            transpileStatement(*stmt, ss, 1);
-        }
-    }
+    ss << "    void game_update() {\n";
+    if (program.updateBlock) transpileBlock(*program.updateBlock, ss, 2);
+    ss << "    }\n\n";
 
-    // RPG Dialogue banner
-    ss << "    if (!engine.currentMessage.empty()) {\n";
-    ss << "        std::string msgBar = \"[ \" + engine.currentMessage + \" ]\";\n";
-    ss << "        int msgX = std::max(2, (engine.width - (int)msgBar.length()) / 2);\n";
-    ss << "        engine.drawText(msgX, engine.height - 2, msgBar, engine.messageColor);\n";
-    ss << "    }\n";
+    ss << "    void game_render() {\n";
+    if (program.renderBlock) transpileBlock(*program.renderBlock, ss, 2);
+    ss << "    }\n\n";
 
-    ss << "    engine.drawText(engine.width - 15, engine.height - 1, \"[ESC/Q: Sair]\", GameRuntime::Color::Default);\n";
-    ss << "    engine.present();\n";
-    ss << "}\n\n";
+    ss << "} // namespace GameRuntime\n\n";
 
-    // Main entry point
     ss << "int main() {\n";
-    ss << "    engine.initTerminal();\n";
-    ss << "    try { game_init(); } catch (...) {}\n";
-    ss << "    while (!engine.exitRequested) {\n";
-    ss << "        engine.pollInput();\n";
-    ss << "        try { game_update(); } catch (...) {}\n";
-    ss << "        try { game_collisions(); } catch (...) {}\n";
-    ss << "        try { game_render(); } catch (...) {}\n";
-    ss << "        engine.syncFrame();\n";
-    ss << "    }\n";
-    ss << "    engine.resetTerminal();\n";
+    ss << "    GameRuntime::initEngine(" << (program.config.width > 0 ? program.config.width : 60)
+       << ", " << (program.config.height > 0 ? program.config.height : 22)
+       << ", " << (program.config.fps > 0 ? program.config.fps : 30)
+       << ", \"" << program.config.title << "\");\n\n";
+
+    ss << "    GameRuntime::game_init();\n\n";
+
+    ss << "    auto targetFrameTime = std::chrono::milliseconds(1000 / GameRuntime::targetFps);\n";
+    ss << "    bool running = true;\n";
+    ss << "    while (running) {\n";
+    ss << "        auto start = std::chrono::high_resolution_clock::now();\n";
+    ss << "        if (GameRuntime::key(\"q\")) break;\n\n";
+
+    ss << "        for (auto& e : GameRuntime::entities) {\n";
+    ss << "            if (e->active) { e->x += e->vx; e->y += e->vy; }\n";
+    ss << "        }\n\n";
+
+    ss << "        GameRuntime::checkCollisions();\n";
+    ss << "        GameRuntime::game_update();\n\n";
+
+    ss << "        GameRuntime::clearBuffer();\n";
+    ss << "        GameRuntime::game_render();\n";
+    ss << "        GameRuntime::present();\n\n";
+
+    ss << "        GameRuntime::entities.erase(\n";
+    ss << "            std::remove_if(GameRuntime::entities.begin(), GameRuntime::entities.end(),\n";
+    ss << "                           [](const auto& e) { return !e->active; }),\n";
+    ss << "            GameRuntime::entities.end()\n";
+    ss << "        );\n\n";
+
+    ss << "        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(\n";
+    ss << "            std::chrono::high_resolution_clock::now() - start);\n";
+    ss << "        if (elapsed < targetFrameTime) {\n";
+    ss << "            std::this_thread::sleep_for(targetFrameTime - elapsed);\n";
+    ss << "        }\n";
+    ss << "    }\n\n";
+
+    ss << "    GameRuntime::stopAudioWorker();\n";
+    ss << "    std::cout << \"\\033[2J\\033[H\\033[0mGame Over! Obrigado por jogar.\\n\";\n";
     ss << "    return 0;\n";
     ss << "}\n";
 
     return ss.str();
 }
 
+void Transpiler::transpileBlock(const BlockStmt& block, std::ostringstream& ss, int indent) {
+    for (const auto& stmt : block.statements) {
+        transpileStatement(*stmt, ss, indent);
+    }
+}
+
 void Transpiler::transpileStatement(const Stmt& stmt, std::ostringstream& ss, int indent) {
     if (auto varDecl = dynamic_cast<const VarDeclStmt*>(&stmt)) {
         emitIndent(ss, indent);
-        ss << "auto " << varDecl->name << " = ";
-        if (varDecl->initializer) transpileExpression(*varDecl->initializer, ss);
-        else ss << "0.0";
+        ss << "Value " << varDecl->name << " = ";
+        if (varDecl->initializer) {
+            transpileExpression(*varDecl->initializer, ss);
+        } else {
+            ss << "0";
+        }
         ss << ";\n";
     } else if (auto ifStmt = dynamic_cast<const IfStmt*>(&stmt)) {
         emitIndent(ss, indent);
-        ss << "if (";
+        ss << "if (static_cast<bool>(";
         transpileExpression(*ifStmt->condition, ss);
-        ss << ") {\n";
+        ss << ")) {\n";
         if (ifStmt->thenBranch) transpileStatement(*ifStmt->thenBranch, ss, indent + 1);
         emitIndent(ss, indent);
         ss << "}";
@@ -807,14 +1045,18 @@ void Transpiler::transpileStatement(const Stmt& stmt, std::ostringstream& ss, in
         ss << "\n";
     } else if (auto whileStmt = dynamic_cast<const WhileStmt*>(&stmt)) {
         emitIndent(ss, indent);
-        ss << "while (";
+        ss << "while (static_cast<bool>(";
         transpileExpression(*whileStmt->condition, ss);
-        ss << ") {\n";
+        ss << ")) {\n";
         if (whileStmt->body) transpileStatement(*whileStmt->body, ss, indent + 1);
         emitIndent(ss, indent);
         ss << "}\n";
     } else if (auto blockStmt = dynamic_cast<const BlockStmt*>(&stmt)) {
-        for (const auto& s : blockStmt->statements) transpileStatement(*s, ss, indent);
+        emitIndent(ss, indent);
+        ss << "{\n";
+        transpileBlock(*blockStmt, ss, indent + 1);
+        emitIndent(ss, indent);
+        ss << "}\n";
     } else if (auto returnStmt = dynamic_cast<const ReturnStmt*>(&stmt)) {
         emitIndent(ss, indent);
         if (returnStmt->value) {
@@ -867,10 +1109,11 @@ void Transpiler::transpileExpression(const Expr& expr, std::ostringstream& ss) {
         transpileExpression(*memAsgn->value, ss);
     } else if (auto call = dynamic_cast<const CallExpr*>(&expr)) {
         if (call->callee == "key" || call->callee == "key_down" || call->callee == "key_pressed" ||
-            call->callee == "beep" || call->callee == "random" || call->callee == "destroy" ||
-            call->callee == "count" || call->callee == "tile" || call->callee == "tile_solid" ||
-            call->callee == "tile_at" || call->callee == "map_box" || call->callee == "map_row" ||
-            call->callee == "camera" || call->callee == "msg" || call->callee == "dialog") {
+            call->callee == "beep" || call->callee == "random" || call->callee == "rnd" ||
+            call->callee == "destroy" || call->callee == "count" || call->callee == "tile" ||
+            call->callee == "tile_solid" || call->callee == "tile_at" || call->callee == "map_box" ||
+            call->callee == "map_row" || call->callee == "camera" || call->callee == "msg" ||
+            call->callee == "dialog" || call->callee == "set_bloom" || call->callee == "set_scanlines") {
             ss << call->callee << "(";
         } else {
             ss << "fn_" << call->callee << "(";

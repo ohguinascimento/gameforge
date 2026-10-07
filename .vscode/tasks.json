@@ -1,0 +1,72 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build GameForge Compiler (-O3, -march=native)",
+            "type": "shell",
+            "command": "C:\\Users\\user\\w64devkit\\bin\\g++.exe",
+            "args": [
+                "-std=c++20",
+                "-O3",
+                "-march=native",
+                "-Iinclude",
+                "src/AST.cpp",
+                "src/Bytecode.cpp",
+                "src/Compiler.cpp",
+                "src/Engine.cpp",
+                "src/GpuRenderer.cpp",
+                "src/Lexer.cpp",
+                "src/Parser.cpp",
+                "src/SemanticAnalyzer.cpp",
+                "src/VM.cpp",
+                "src/Transpiler.cpp",
+                "src/main.cpp",
+                "-o",
+                "bin/gamec.exe"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "Build Space Invaders (GPU OpenGL 3.3 + Shaders)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\bin\\gamec.exe",
+            "args": [
+                "build",
+                "games/space_invaders_gpu.game",
+                "-o",
+                "bin/space_invaders.exe"
+            ],
+            "dependsOn": "Build GameForge Compiler (-O3, -march=native)",
+            "group": "build",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "Build Pong Arcade (GPU OpenGL 3.3 + Shaders)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\bin\\gamec.exe",
+            "args": [
+                "build",
+                "games/pong_gpu.game",
+                "-o",
+                "bin/pong.exe"
+            ],
+            "dependsOn": "Build GameForge Compiler (-O3, -march=native)",
+            "group": "build",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "Check Semantic Analysis (gamec check)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\bin\\gamec.exe",
+            "args": [
+                "check",
+                "${file}"
+            ],
+            "problemMatcher": ["$gcc"]
+        }
+    ]
+}
