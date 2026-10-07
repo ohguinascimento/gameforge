@@ -385,6 +385,83 @@ InterpretResult VM::executeChunk(const Chunk& chunk, size_t baseOffset) {
                 break;
             }
 
+            case OpCode::OP_TILE_SET: {
+                Value solidVal = pop();
+                Value colVal = pop();
+                Value chVal = pop();
+                Value yVal = pop();
+                Value xVal = pop();
+                int x = static_cast<int>(xVal.asNumber());
+                int y = static_cast<int>(yVal.asNumber());
+                char ch = chVal.isString() && !chVal.asString().empty() ? chVal.asString()[0] : ' ';
+                Color c = colVal.isString() ? parseColor(colVal.asString()) : Color::White;
+                bool solid = solidVal.isBool() ? solidVal.asBool() : (solidVal.asNumber() != 0.0);
+                engine.setTile(x, y, ch, c, solid);
+                break;
+            }
+            case OpCode::OP_TILE_SOLID: {
+                Value yVal = pop();
+                Value xVal = pop();
+                int x = static_cast<int>(xVal.asNumber());
+                int y = static_cast<int>(yVal.asNumber());
+                push(Value(engine.isTileSolid(x, y)));
+                break;
+            }
+            case OpCode::OP_TILE_GET: {
+                Value yVal = pop();
+                Value xVal = pop();
+                int x = static_cast<int>(xVal.asNumber());
+                int y = static_cast<int>(yVal.asNumber());
+                char ch = engine.getTileChar(x, y);
+                push(Value(std::string(1, ch)));
+                break;
+            }
+            case OpCode::OP_MAP_BOX: {
+                Value solidVal = pop();
+                Value colVal = pop();
+                Value chVal = pop();
+                Value hVal = pop();
+                Value wVal = pop();
+                Value yVal = pop();
+                Value xVal = pop();
+                int x = static_cast<int>(xVal.asNumber());
+                int y = static_cast<int>(yVal.asNumber());
+                int w = static_cast<int>(wVal.asNumber());
+                int h = static_cast<int>(hVal.asNumber());
+                char ch = chVal.isString() && !chVal.asString().empty() ? chVal.asString()[0] : '#';
+                Color c = colVal.isString() ? parseColor(colVal.asString()) : Color::Default;
+                bool solid = solidVal.isBool() ? solidVal.asBool() : (solidVal.asNumber() != 0.0);
+                engine.fillMapBox(x, y, w, h, ch, c, solid);
+                break;
+            }
+            case OpCode::OP_MAP_ROW: {
+                Value solidVal = pop();
+                Value colVal = pop();
+                Value rowVal = pop();
+                Value yVal = pop();
+                Value xVal = pop();
+                int x = static_cast<int>(xVal.asNumber());
+                int y = static_cast<int>(yVal.asNumber());
+                std::string row = rowVal.isString() ? rowVal.asString() : "";
+                Color c = colVal.isString() ? parseColor(colVal.asString()) : Color::White;
+                bool solid = solidVal.isBool() ? solidVal.asBool() : (solidVal.asNumber() != 0.0);
+                engine.setMapRow(x, y, row, c, solid);
+                break;
+            }
+            case OpCode::OP_CAMERA_SET: {
+                Value yVal = pop();
+                Value xVal = pop();
+                engine.setCamera(static_cast<int>(xVal.asNumber()), static_cast<int>(yVal.asNumber()));
+                break;
+            }
+            case OpCode::OP_SET_MESSAGE: {
+                Value colVal = pop();
+                Value msgVal = pop();
+                Color c = colVal.isString() ? parseColor(colVal.asString()) : Color::Yellow;
+                engine.setMessage(msgVal.isString() ? msgVal.asString() : msgVal.toString(), c);
+                break;
+            }
+
             default:
                 runtimeError("Unknown opcode");
                 if (!safeMode) return InterpretResult::RuntimeError;
@@ -472,10 +549,32 @@ void VM::runRender() {
     try {
         engine.clearBuffer();
 
+        int camX = engine.getCameraX();
+        int camY = engine.getCameraY();
+
+        // Render tilemap background with camera offset
+        const auto& tiles = engine.getTiles();
+        int mapW = engine.getMapWidth();
+        int mapH = engine.getMapHeight();
+        if (!tiles.empty() && mapW > 0) {
+            for (int sy = 1; sy < engine.getHeight() - 1; ++sy) {
+                int my = sy + camY;
+                if (my < 0 || my >= mapH) continue;
+                for (int sx = 1; sx < engine.getWidth() - 1; ++sx) {
+                    int mx = sx + camX;
+                    if (mx < 0 || mx >= mapW) continue;
+                    const auto& t = tiles[my * mapW + mx];
+                    if (t.ch != ' ' && t.ch != '\0') {
+                        engine.setPixel(sx, sy, t.ch, t.color);
+                    }
+                }
+            }
+        }
+
         // Draw game frame box
         engine.drawBox(0, 0, engine.getWidth(), engine.getHeight(), Color::Blue);
 
-        // Header info: Title, Score, Lives
+        // Header info: Title, Score
         std::string titleText = " " + game.config.title + " ";
         engine.drawText(2, 0, titleText, Color::Cyan);
 
@@ -493,18 +592,33 @@ void VM::runRender() {
             engine.drawText(2, engine.getHeight() - 1, livesStr, Color::Green);
         }
 
-        // Render active entities
+        // RPG HUD globals: HP and Gold
+        auto hpIt = globals.find("hp");
+        if (hpIt != globals.end()) {
+            std::string hpStr = "HP: " + hpIt->second.toString();
+            engine.drawText(livesIt != globals.end() ? 14 : 2, engine.getHeight() - 1, hpStr, Color::Red);
+        }
+
+        auto goldIt = globals.find("gold");
+        if (goldIt != globals.end()) {
+            std::string goldStr = "Ouro: " + goldIt->second.toString();
+            engine.drawText(26, engine.getHeight() - 1, goldStr, Color::Yellow);
+        }
+
+        // Render active entities (offset by camera)
         const auto& entities = engine.getAllEntities();
         for (const auto& kv : entities) {
             const Entity& e = kv.second;
             if (!e.active) continue;
 
-            int x = static_cast<int>(std::round(e.getX()));
-            int y = static_cast<int>(std::round(e.getY()));
-            char sym = e.getSymbol();
-            Color col = e.getColor();
+            int x = static_cast<int>(std::round(e.getX())) - camX;
+            int y = static_cast<int>(std::round(e.getY())) - camY;
 
-            engine.setPixel(x, y, sym, col);
+            if (x > 0 && x < engine.getWidth() - 1 && y > 0 && y < engine.getHeight() - 1) {
+                char sym = e.getSymbol();
+                Color col = e.getColor();
+                engine.setPixel(x, y, sym, col);
+            }
         }
 
         // Run custom render chunk if defined
@@ -514,6 +628,13 @@ void VM::runRender() {
             if (stack.size() > renderBase) {
                 stack.resize(renderBase);
             }
+        }
+
+        // RPG Dialogue / Message Banner
+        if (!engine.getMessage().empty()) {
+            std::string msgBar = "[ " + engine.getMessage() + " ]";
+            int msgX = std::max(2, (engine.getWidth() - static_cast<int>(msgBar.length())) / 2);
+            engine.drawText(msgX, engine.getHeight() - 2, msgBar, engine.getMessageColor());
         }
 
         // Footer prompt with safe mode status if errors occurred

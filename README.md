@@ -158,8 +158,58 @@ while (i < 10) {
 | `beep(freq, durMs)` | Toca um som retrô no alto-falante interno | `beep(440, 50);` |
 | `random(min, max)` | Gera um número inteiro pseudoaleatório | `var r = random(2, 50);` |
 | `count("Tipo")` | Retorna o total de entidades ativas desse tipo | `if (count("Alien") == 0) { ... }` |
+| `tile(x, y, ch, col, solid)` | Define um ladrilho no mapa com colisão opcional | `tile(10, 5, ".", "white", 0);` |
+| `tile_solid(x, y)` | Retorna se o ladrilho na posição é uma parede sólida | `if (!tile_solid(x, y - 1)) { ... }` |
+| `tile_at(x, y)` | Retorna o caractere do ladrilho na posição dada | `if (tile_at(x, y) == "+") { ... }` |
+| `map_box(x, y, w, h, ch, col, s)` | Constrói salas ou contornos com paredes sólidas | `map_box(2, 2, 14, 8, "#", "blue", 1);` |
+| `map_row(x, y, str, col, solid)` | Imprime uma linha inteira de ladrilhos no mapa | `map_row(5, 10, "###...###", "blue", 1);` |
+| `camera(cx, cy)` | Move a câmera para seguir o herói pelo mundo | `camera(hero.x - 30, hero.y - 10);` |
+| `msg(texto, col)` | Exibe um banner de diálogo/notificação RPG na tela | `msg("Porta destrancada!", "green");` |
 
 > **Teclas suportadas:** `"UP"`, `"DOWN"`, `"LEFT"`, `"RIGHT"`, `"SPACE"`, `"ENTER"`, `"ESC"`, `"W"`, `"A"`, `"S"`, `"D"` e letras `"A"` a `"Z"`.
+
+---
+
+## 🗺️ Criação de Mapas RPG e Masmorras
+
+O GameForge inclui suporte nativo a jogos de aventura, masmorras e RPGs com grid 2D:
+
+### 1. Construção de Salas e Portas
+Você pode construir cômodos inteiros com `map_box` e abrir passagens ou portas com `tile`:
+```game
+// Constrói sala de 14x8 com paredes sólidas
+map_box(2, 2, 14, 8, "#", "blue", 1);
+
+// Abre uma passagem não sólida (caminhável)
+tile(15, 5, ".", "white", 0);
+
+// Coloca uma porta trancada sólida
+tile(7, 12, "+", "yellow", 1);
+```
+
+### 2. Movimentação com Paredes Sólidas
+Utilize `!tile_solid(x, y)` para impedir que o herói atravesse paredes ou obstáculos:
+```game
+if (key_pressed("UP")) {
+    if (!tile_solid(hero.x, hero.y - 1)) {
+        hero.y = hero.y - 1;
+    } else {
+        msg("Caminho bloqueado por parede de pedra.", "white");
+    }
+}
+```
+
+### 3. Câmera Dinâmica que Segue o Herói
+Com mapas maiores que a tela do console, a câmera acompanha o jogador suavemente:
+```game
+update {
+    camera(hero.x - 30, hero.y - 10);
+}
+```
+
+### 4. Caixas de Diálogo e HUD RPG Automático
+- `msg("Texto...", "cor")`: Exibe um letreiro elegante de mensagem/diálogo no rodapé.
+- Variáveis globais como `var hp = 100;` e `var gold = 0;` são reconhecidas pelo motor gráfico e exibidas automaticamente no painel de status inferior em cores temáticas (Vermelho para HP, Amarelo para Ouro).
 
 ---
 
@@ -236,6 +286,14 @@ Na pasta `games/` você encontra implementações completas:
    * Esquadrão completo de alienígenas em formação matricial.
    * Céu estrelado gerado proceduralmente no fundo.
    * Detecção de vitória ao eliminar todos os alienígenas (`count("Alien") == 0`).
+4. **[rpg_dungeon.game](file:///d:/Projetos/Compilador%20game/games/rpg_dungeon.game)**:
+   * Masmorra RPG completa com múltiplas salas, corredores e paredes sólidas (`map_box`, `tile`).
+   * Portas trancadas que exigem coletar a chave de ferro `k` para abrir.
+   * Fonte sagrada que regenera pontos de vida (`hp`).
+   * Câmera dinâmica de rolagem centralizada no herói (`camera`).
+   * Monstros (Orc, Esqueleto) com pontos de vida individuais e combate.
+   * Baú com tesouro em moedas de ouro (`gold`) e poções de cura.
+   * Sistema de diálogo narrativo e notificações temáticas (`msg`).
 
 ---
 

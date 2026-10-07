@@ -121,6 +121,7 @@ namespace GameRuntime {
     }
 
     struct Pixel { char ch = ' '; Color color = Color::White; };
+    struct Tile { char ch = ' '; Color color = Color::White; bool solid = false; };
 )RAW";
 
     ss << "    struct BaseEntity {\n";
@@ -242,6 +243,13 @@ namespace GameRuntime {
         std::string title;
         bool exitRequested = false;
         std::vector<Pixel> backBuffer;
+        int mapWidth = 80;
+        int mapHeight = 25;
+        std::vector<Tile> tiles;
+        int cameraX = 0;
+        int cameraY = 0;
+        std::string currentMessage;
+        Color messageColor = Color::Yellow;
         uint32_t nextId = 1;
         std::unordered_map<std::string, bool> keysDown;
         std::unordered_map<std::string, bool> keysPressed;
@@ -254,7 +262,58 @@ namespace GameRuntime {
 
         Engine(int w, int h, int fps, std::string t) : width(w), height(h), targetFps(fps), title(t) {
             backBuffer.resize(w * h, Pixel{' ', Color::Default});
+            mapWidth = w;
+            mapHeight = h;
+            tiles.resize(w * h, Tile{' ', Color::Default, false});
             lastFrameTime = std::chrono::steady_clock::now();
+        }
+
+        void setMapSize(int w, int h) {
+            mapWidth = w;
+            mapHeight = h;
+            tiles.assign(w * h, Tile{' ', Color::Default, false});
+        }
+
+        void setTile(int x, int y, char ch, Color col, bool solid) {
+            if (x >= 0 && x < mapWidth && y >= 0 && y < mapHeight) {
+                tiles[y * mapWidth + x] = Tile{ch, col, solid};
+            }
+        }
+
+        bool isTileSolid(int x, int y) const {
+            if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) return true;
+            return tiles[y * mapWidth + x].solid;
+        }
+
+        char getTileChar(int x, int y) const {
+            if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) return ' ';
+            return tiles[y * mapWidth + x].ch;
+        }
+
+        void fillMapBox(int x, int y, int w, int h, char ch, Color col, bool solid) {
+            for (int cy = y; cy < y + h; ++cy) {
+                for (int cx = x; cx < x + w; ++cx) {
+                    if (cy == y || cy == y + h - 1 || cx == x || cx == x + w - 1) {
+                        setTile(cx, cy, ch, col, solid);
+                    }
+                }
+            }
+        }
+
+        void setMapRow(int x, int y, const std::string& row, Color col, bool solid) {
+            for (size_t i = 0; i < row.size(); ++i) {
+                setTile(x + (int)i, y, row[i], col, solid);
+            }
+        }
+
+        void setCamera(int cx, int cy) {
+            cameraX = cx;
+            cameraY = cy;
+        }
+
+        void setMessage(const std::string& msg, Color col = Color::Yellow) {
+            currentMessage = msg;
+            messageColor = col;
         }
 
         void initTerminal() {
@@ -480,6 +539,34 @@ namespace GameRuntime {
     ss << "    return cnt;\n";
     ss << "}\n\n";
 
+    // RPG Map helpers
+    ss << "inline void tile(const GameRuntime::Value& x, const GameRuntime::Value& y, const GameRuntime::Value& ch, const GameRuntime::Value& col = \"white\", const GameRuntime::Value& solid = 0.0) {\n";
+    ss << "    char c = ch.str.empty() ? ' ' : ch.str[0];\n";
+    ss << "    engine.setTile((int)x.num, (int)y.num, c, GameRuntime::parseColor(col.str), solid.num != 0.0);\n";
+    ss << "}\n";
+    ss << "inline GameRuntime::Value tile_solid(const GameRuntime::Value& x, const GameRuntime::Value& y) {\n";
+    ss << "    return GameRuntime::Value(engine.isTileSolid((int)x.num, (int)y.num) ? 1.0 : 0.0);\n";
+    ss << "}\n";
+    ss << "inline GameRuntime::Value tile_at(const GameRuntime::Value& x, const GameRuntime::Value& y) {\n";
+    ss << "    return GameRuntime::Value(std::string(1, engine.getTileChar((int)x.num, (int)y.num)));\n";
+    ss << "}\n";
+    ss << "inline void map_box(const GameRuntime::Value& x, const GameRuntime::Value& y, const GameRuntime::Value& w, const GameRuntime::Value& h, const GameRuntime::Value& ch = \"#\", const GameRuntime::Value& col = \"gray\", const GameRuntime::Value& solid = 1.0) {\n";
+    ss << "    char c = ch.str.empty() ? '#' : ch.str[0];\n";
+    ss << "    engine.fillMapBox((int)x.num, (int)y.num, (int)w.num, (int)h.num, c, GameRuntime::parseColor(col.str), solid.num != 0.0);\n";
+    ss << "}\n";
+    ss << "inline void map_row(const GameRuntime::Value& x, const GameRuntime::Value& y, const GameRuntime::Value& row, const GameRuntime::Value& col = \"white\", const GameRuntime::Value& solid = 0.0) {\n";
+    ss << "    engine.setMapRow((int)x.num, (int)y.num, row.str, GameRuntime::parseColor(col.str), solid.num != 0.0);\n";
+    ss << "}\n";
+    ss << "inline void camera(const GameRuntime::Value& cx, const GameRuntime::Value& cy) {\n";
+    ss << "    engine.setCamera((int)cx.num, (int)cy.num);\n";
+    ss << "}\n";
+    ss << "inline void msg(const GameRuntime::Value& m, const GameRuntime::Value& col = \"yellow\") {\n";
+    ss << "    engine.setMessage(m.str.empty() ? std::to_string((int)m.num) : m.str, GameRuntime::parseColor(col.str));\n";
+    ss << "}\n";
+    ss << "inline void dialog(const GameRuntime::Value& m, const GameRuntime::Value& col = \"yellow\") {\n";
+    ss << "    msg(m, col);\n";
+    ss << "}\n\n";
+
     // Functions
     for (const auto& fn : program.functions) {
         ss << "GameRuntime::Value fn_" << fn->name << "(";
@@ -501,6 +588,9 @@ namespace GameRuntime {
     declaredFns.insert("key"); declaredFns.insert("key_down"); declaredFns.insert("key_pressed");
     declaredFns.insert("beep"); declaredFns.insert("random"); declaredFns.insert("destroy");
     declaredFns.insert("count");
+    declaredFns.insert("tile"); declaredFns.insert("tile_solid"); declaredFns.insert("tile_at");
+    declaredFns.insert("map_box"); declaredFns.insert("map_row"); declaredFns.insert("camera");
+    declaredFns.insert("msg"); declaredFns.insert("dialog");
 
     for (const auto& call : calledFunctions) {
         if (declaredFns.find(call) == declaredFns.end()) {
@@ -559,13 +649,27 @@ namespace GameRuntime {
     // Render function
     ss << "void game_render() {\n";
     ss << "    engine.clear();\n";
+    ss << "    for (int sy = 1; sy < engine.height - 1; ++sy) {\n";
+    ss << "        int my = sy + engine.cameraY;\n";
+    ss << "        if (my < 0 || my >= engine.mapHeight) continue;\n";
+    ss << "        for (int sx = 1; sx < engine.width - 1; ++sx) {\n";
+    ss << "            int mx = sx + engine.cameraX;\n";
+    ss << "            if (mx < 0 || mx >= engine.mapWidth) continue;\n";
+    ss << "            const auto& t = engine.tiles[my * engine.mapWidth + mx];\n";
+    ss << "            if (t.ch != ' ' && t.ch != '\\0') engine.setPixel(sx, sy, t.ch, t.color);\n";
+    ss << "        }\n";
+    ss << "    }\n";
     ss << "    engine.drawBox(0, 0, engine.width, engine.height, GameRuntime::Color::Blue);\n";
     ss << "    engine.drawText(2, 0, \" " << program.config.title << " \", GameRuntime::Color::Cyan);\n";
     bool hasScore = false;
     bool hasLives = false;
+    bool hasHp = false;
+    bool hasGold = false;
     for (const auto& g : program.globals) {
         if (g->name == "score") hasScore = true;
         if (g->name == "lives") hasLives = true;
+        if (g->name == "hp") hasHp = true;
+        if (g->name == "gold") hasGold = true;
     }
     if (hasScore) {
         ss << "    engine.drawText(engine.width - 16, 0, \"Score: \" + std::to_string((int)score), GameRuntime::Color::Yellow);\n";
@@ -573,11 +677,23 @@ namespace GameRuntime {
     if (hasLives) {
         ss << "    engine.drawText(2, engine.height - 1, \"Lives: \" + std::to_string((int)lives), GameRuntime::Color::Green);\n";
     }
+    if (hasHp) {
+        ss << "    engine.drawText(" << (hasLives ? 14 : 2) << ", engine.height - 1, \"HP: \" + std::to_string((int)hp), GameRuntime::Color::Red);\n";
+    }
+    if (hasGold) {
+        ss << "    engine.drawText(26, engine.height - 1, \"Ouro: \" + std::to_string((int)gold), GameRuntime::Color::Yellow);\n";
+    }
 
-    // Draw entities
+    // Draw entities (with camera offset)
     for (const auto& entity : program.entities) {
         ss << "    for (auto& e : entities_" << entity->name << ") {\n";
-        ss << "        if (e->active) engine.setPixel((int)std::round(e->x), (int)std::round(e->y), e->symbol.empty() ? '?' : e->symbol[0], GameRuntime::parseColor(e->color));\n";
+        ss << "        if (e->active) {\n";
+        ss << "            int ex = (int)std::round(e->x) - engine.cameraX;\n";
+        ss << "            int ey = (int)std::round(e->y) - engine.cameraY;\n";
+        ss << "            if (ex > 0 && ex < engine.width - 1 && ey > 0 && ey < engine.height - 1) {\n";
+        ss << "                engine.setPixel(ex, ey, e->symbol.empty() ? '?' : e->symbol[0], GameRuntime::parseColor(e->color));\n";
+        ss << "            }\n";
+        ss << "        }\n";
         ss << "    }\n";
     }
 
@@ -586,6 +702,13 @@ namespace GameRuntime {
             transpileStatement(*stmt, ss, 1);
         }
     }
+
+    // RPG Dialogue banner
+    ss << "    if (!engine.currentMessage.empty()) {\n";
+    ss << "        std::string msgBar = \"[ \" + engine.currentMessage + \" ]\";\n";
+    ss << "        int msgX = std::max(2, (engine.width - (int)msgBar.length()) / 2);\n";
+    ss << "        engine.drawText(msgX, engine.height - 2, msgBar, engine.messageColor);\n";
+    ss << "    }\n";
 
     ss << "    engine.drawText(engine.width - 15, engine.height - 1, \"[ESC/Q: Sair]\", GameRuntime::Color::Default);\n";
     ss << "    engine.present();\n";
@@ -694,7 +817,9 @@ void Transpiler::transpileExpression(const Expr& expr, std::ostringstream& ss) {
     } else if (auto call = dynamic_cast<const CallExpr*>(&expr)) {
         if (call->callee == "key" || call->callee == "key_down" || call->callee == "key_pressed" ||
             call->callee == "beep" || call->callee == "random" || call->callee == "destroy" ||
-            call->callee == "count") {
+            call->callee == "count" || call->callee == "tile" || call->callee == "tile_solid" ||
+            call->callee == "tile_at" || call->callee == "map_box" || call->callee == "map_row" ||
+            call->callee == "camera" || call->callee == "msg" || call->callee == "dialog") {
             ss << call->callee << "(";
         } else {
             ss << "fn_" << call->callee << "(";

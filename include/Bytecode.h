@@ -121,7 +121,16 @@ enum class OpCode : uint8_t {
     OP_BEEP,
     OP_RANDOM,
     OP_PRINT_AT,
-    OP_COUNT_ENTITIES
+    OP_COUNT_ENTITIES,
+
+    // RPG Map Operations
+    OP_TILE_SET,
+    OP_TILE_SOLID,
+    OP_TILE_GET,
+    OP_MAP_BOX,
+    OP_MAP_ROW,
+    OP_CAMERA_SET,
+    OP_SET_MESSAGE
 };
 
 struct Chunk {

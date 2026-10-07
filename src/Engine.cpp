@@ -8,6 +8,9 @@ Engine::Engine(int width, int height, int fps, const std::string& title)
     : width(width), height(height), targetFps(fps), title(title) {
     frontBuffer.resize(width * height, Pixel{' ', Color::Default});
     backBuffer.resize(width * height, Pixel{' ', Color::Default});
+    mapWidth = width;
+    mapHeight = height;
+    tiles.resize(mapWidth * mapHeight, Tile{' ', Color::Default, false});
     lastFrameTime = std::chrono::steady_clock::now();
 }
 
@@ -81,6 +84,57 @@ void Engine::drawBox(int x, int y, int w, int h, Color color) {
     setPixel(x + w - 1, y, '+', color);
     setPixel(x, y + h - 1, '+', color);
     setPixel(x + w - 1, y + h - 1, '+', color);
+}
+
+void Engine::setMapSize(int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    mapWidth = w;
+    mapHeight = h;
+    tiles.assign(mapWidth * mapHeight, Tile{' ', Color::Default, false});
+}
+
+void Engine::setTile(int x, int y, char ch, Color color, bool solid) {
+    if (x >= 0 && x < mapWidth && y >= 0 && y < mapHeight) {
+        tiles[y * mapWidth + x] = Tile{ch, color, solid};
+    }
+}
+
+bool Engine::isTileSolid(int x, int y) const {
+    if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) return true;
+    return tiles[y * mapWidth + x].solid;
+}
+
+char Engine::getTileChar(int x, int y) const {
+    if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) return '#';
+    return tiles[y * mapWidth + x].ch;
+}
+
+void Engine::fillMapBox(int x, int y, int w, int h, char ch, Color color, bool solid) {
+    for (int cy = y; cy < y + h; ++cy) {
+        for (int cx = x; cx < x + w; ++cx) {
+            if (cy == y || cy == y + h - 1 || cx == x || cx == x + w - 1) {
+                setTile(cx, cy, ch, color, solid);
+            }
+        }
+    }
+}
+
+void Engine::setMapRow(int x, int y, const std::string& row, Color color, bool solid) {
+    for (size_t i = 0; i < row.size(); ++i) {
+        if (row[i] != ' ') {
+            setTile(x + static_cast<int>(i), y, row[i], color, solid);
+        }
+    }
+}
+
+void Engine::setCamera(int cx, int cy) {
+    cameraX = cx;
+    cameraY = cy;
+}
+
+void Engine::setMessage(const std::string& msg, Color color) {
+    currentMessage = msg;
+    messageColor = color;
 }
 
 void Engine::present() {

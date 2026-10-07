@@ -10,6 +10,12 @@ struct Pixel {
     Color color = Color::White;
 };
 
+struct Tile {
+    char ch = ' ';
+    Color color = Color::Default;
+    bool solid = false;
+};
+
 struct Entity {
     uint32_t id = 0;
     std::string type;
@@ -72,6 +78,23 @@ public:
     void playBeep(int freq, int durationMs);
     int getRandomInt(int minVal, int maxVal);
 
+    // RPG Map & Tilemap
+    void setMapSize(int w, int h);
+    void setTile(int x, int y, char ch, Color color, bool solid);
+    bool isTileSolid(int x, int y) const;
+    char getTileChar(int x, int y) const;
+    void fillMapBox(int x, int y, int w, int h, char ch, Color color, bool solid);
+    void setMapRow(int x, int y, const std::string& row, Color color, bool solid);
+    void setCamera(int cx, int cy);
+    int getCameraX() const { return cameraX; }
+    int getCameraY() const { return cameraY; }
+    void setMessage(const std::string& msg, Color color = Color::Yellow);
+    const std::string& getMessage() const { return currentMessage; }
+    Color getMessageColor() const { return messageColor; }
+    const std::vector<Tile>& getTiles() const { return tiles; }
+    int getMapWidth() const { return mapWidth; }
+    int getMapHeight() const { return mapHeight; }
+
     bool shouldClose() const { return exitRequested; }
     void requestExit() { exitRequested = true; }
 
@@ -86,6 +109,15 @@ private:
     int height;
     int targetFps;
     std::string title;
+
+    // Tilemap & Camera state
+    int mapWidth = 0;
+    int mapHeight = 0;
+    std::vector<Tile> tiles;
+    int cameraX = 0;
+    int cameraY = 0;
+    std::string currentMessage;
+    Color messageColor = Color::Yellow;
 
     std::vector<Pixel> frontBuffer;
     std::vector<Pixel> backBuffer;

@@ -524,6 +524,56 @@ void Compiler::compileCall(const CallExpr& expr, Chunk& chunk, ScopeContext& sco
         emitOp(chunk, OpCode::OP_NULL); // push result
         return;
     }
+    if (expr.callee == "tile") {
+        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
+        if (expr.arguments.size() < 4) emitConstant(chunk, Value("white"));
+        if (expr.arguments.size() < 5) emitConstant(chunk, Value(0.0));
+        emitOp(chunk, OpCode::OP_TILE_SET);
+        emitOp(chunk, OpCode::OP_NULL);
+        return;
+    }
+    if (expr.callee == "tile_solid") {
+        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
+        emitOp(chunk, OpCode::OP_TILE_SOLID);
+        return;
+    }
+    if (expr.callee == "tile_at") {
+        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
+        emitOp(chunk, OpCode::OP_TILE_GET);
+        return;
+    }
+    if (expr.callee == "map_box") {
+        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
+        if (expr.arguments.size() < 5) emitConstant(chunk, Value("#"));
+        if (expr.arguments.size() < 6) emitConstant(chunk, Value("gray"));
+        if (expr.arguments.size() < 7) emitConstant(chunk, Value(1.0));
+        emitOp(chunk, OpCode::OP_MAP_BOX);
+        emitOp(chunk, OpCode::OP_NULL);
+        return;
+    }
+    if (expr.callee == "map_row") {
+        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
+        if (expr.arguments.size() < 4) emitConstant(chunk, Value("white"));
+        if (expr.arguments.size() < 5) emitConstant(chunk, Value(0.0));
+        emitOp(chunk, OpCode::OP_MAP_ROW);
+        emitOp(chunk, OpCode::OP_NULL);
+        return;
+    }
+    if (expr.callee == "camera") {
+        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
+        emitOp(chunk, OpCode::OP_CAMERA_SET);
+        emitOp(chunk, OpCode::OP_NULL);
+        return;
+    }
+    if (expr.callee == "msg" || expr.callee == "dialog") {
+        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
+        if (expr.arguments.size() < 2) {
+            emitConstant(chunk, Value("yellow"));
+        }
+        emitOp(chunk, OpCode::OP_SET_MESSAGE);
+        emitOp(chunk, OpCode::OP_NULL);
+        return;
+    }
 
     // User-defined function call
     // Push callee name

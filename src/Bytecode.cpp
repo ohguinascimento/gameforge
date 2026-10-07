@@ -40,6 +40,13 @@ const char* opCodeName(OpCode op) {
         case OpCode::OP_RANDOM: return "OP_RANDOM";
         case OpCode::OP_PRINT_AT: return "OP_PRINT_AT";
         case OpCode::OP_COUNT_ENTITIES: return "OP_COUNT_ENTITIES";
+        case OpCode::OP_TILE_SET: return "OP_TILE_SET";
+        case OpCode::OP_TILE_SOLID: return "OP_TILE_SOLID";
+        case OpCode::OP_TILE_GET: return "OP_TILE_GET";
+        case OpCode::OP_MAP_BOX: return "OP_MAP_BOX";
+        case OpCode::OP_MAP_ROW: return "OP_MAP_ROW";
+        case OpCode::OP_CAMERA_SET: return "OP_CAMERA_SET";
+        case OpCode::OP_SET_MESSAGE: return "OP_SET_MESSAGE";
         default: return "OP_UNKNOWN";
     }
 }

@@ -1,0 +1,244 @@
+// ==========================================
+// GameForge RPG: Catacumbas Esquecidas
+// Demonstracao de Mapas, Paredes Solidas,
+// Portas Trancadas, Camera, Baús e Dialogos
+// ==========================================
+
+game "Dungeon Crawler RPG" {
+    width: 60,
+    height: 22,
+    fps: 20
+}
+
+var hp = 100;
+var gold = 0;
+var keys = 0;
+var hero = 0;
+
+entity Hero {
+    var x = 5;
+    var y = 5;
+    var symbol = "@";
+    var color = "cyan";
+}
+
+entity Monster {
+    var x = 32;
+    var y = 5;
+    var hp = 30;
+    var symbol = "M";
+    var color = "red";
+}
+
+entity Skeleton {
+    var x = 20;
+    var y = 14;
+    var hp = 20;
+    var symbol = "S";
+    var color = "white";
+}
+
+entity Chest {
+    var x = 36;
+    var y = 8;
+    var value = 100;
+    var symbol = "$";
+    var color = "yellow";
+}
+
+entity Potion {
+    var x = 25;
+    var y = 14;
+    var heal = 40;
+    var symbol = "+";
+    var color = "magenta";
+}
+
+entity KeyItem {
+    var x = 12;
+    var y = 7;
+    var symbol = "k";
+    var color = "yellow";
+}
+
+init {
+    // ------------------------------------
+    // Construcao das Salas e Masmorras (Mapas RPG)
+    // ------------------------------------
+
+    // Sala Inicial (5x8 interior)
+    map_box(2, 2, 14, 8, "#", "blue", 1);
+    tile(15, 5, ".", "white", 0); // Saida direita
+
+    // Corredor Central conectando a Sala 2
+    map_box(15, 4, 12, 3, "#", "blue", 1);
+    tile(15, 5, ".", "white", 0);
+    tile(26, 5, ".", "white", 0);
+
+    // Sala do Tesouro (Sala 2 com Monstro e Bau)
+    map_box(26, 2, 14, 9, "#", "blue", 1);
+    tile(26, 5, ".", "white", 0);
+
+    // Corredor Sul com Porta Trancada
+    map_box(6, 9, 3, 4, "#", "blue", 1);
+    tile(7, 9, ".", "white", 0);  // Entrada do corredor
+    tile(7, 12, "+", "yellow", 1); // Porta trancada com chave
+
+    // Catacumba Inferior (Sala 3)
+    map_box(3, 12, 26, 7, "#", "blue", 1);
+    tile(7, 12, "+", "yellow", 1); // A mesma porta na parede norte
+
+    // Detalhes de Ambiente: Fonte de Agua Sagrada na sala inicial
+    tile(4, 4, "~", "cyan", 0);
+    tile(5, 4, "~", "cyan", 0);
+
+    // Spawn dos Personagens e Objetos
+    hero = spawn Hero;
+    hero.x = 5;
+    hero.y = 5;
+
+    spawn KeyItem;
+    spawn Monster;
+    spawn Skeleton;
+    spawn Chest;
+    spawn Potion;
+
+    msg("Explore a Masmorra! Ache a chave 'k' para a porta trancada (+).", "yellow");
+    beep(440, 40);
+}
+
+update {
+    // A camera segue suavemente o heroi pelo mapa
+    camera(hero.x - 30, hero.y - 10);
+
+    if (hp > 0) {
+        // Movimento para CIMA com deteccao de paredes solidas
+        if (key_pressed("UP") || key_pressed("W")) {
+            if (!tile_solid(hero.x, hero.y - 1)) {
+                hero.y = hero.y - 1;
+            } else {
+                if (tile_at(hero.x, hero.y - 1) == "+") {
+                    if (keys > 0) {
+                        keys = keys - 1;
+                        tile(hero.x, hero.y - 1, "/", "yellow", 0);
+                        msg("Porta destrancada com a chave de ferro!", "green");
+                        beep(700, 50);
+                    } else {
+                        msg("Porta trancada (+)! Encontre a chave 'k' primeiro.", "red");
+                        beep(200, 40);
+                    }
+                } else {
+                    msg("Parede solida bloqueia seu avanco.", "white");
+                }
+            }
+        }
+
+        // Movimento para BAIXO
+        if (key_pressed("DOWN") || key_pressed("S")) {
+            if (!tile_solid(hero.x, hero.y + 1)) {
+                hero.y = hero.y + 1;
+            } else {
+                if (tile_at(hero.x, hero.y + 1) == "+") {
+                    if (keys > 0) {
+                        keys = keys - 1;
+                        tile(hero.x, hero.y + 1, "/", "yellow", 0);
+                        msg("Porta destrancada com a chave de ferro!", "green");
+                        beep(700, 50);
+                    } else {
+                        msg("Porta trancada (+)! Encontre a chave 'k' primeiro.", "red");
+                        beep(200, 40);
+                    }
+                } else {
+                    msg("Parede solida bloqueia seu avanco.", "white");
+                }
+            }
+        }
+
+        // Movimento para ESQUERDA
+        if (key_pressed("LEFT") || key_pressed("A")) {
+            if (!tile_solid(hero.x - 1, hero.y)) {
+                hero.x = hero.x - 1;
+            } else {
+                msg("Parede solida bloqueia seu avanco.", "white");
+            }
+        }
+
+        // Movimento para DIREITA
+        if (key_pressed("RIGHT") || key_pressed("D")) {
+            if (!tile_solid(hero.x + 1, hero.y)) {
+                hero.x = hero.x + 1;
+            } else {
+                msg("Parede solida bloqueia seu avanco.", "white");
+            }
+        }
+
+        // Interacao com a Fonte Sagrada
+        if (tile_at(hero.x, hero.y) == "~" && hp < 100) {
+            hp = hp + 1;
+            msg("Agua sagrada regenera suas forcas (+1 HP)", "cyan");
+        }
+    }
+}
+
+// Coleta da chave de ferro
+on collision(Hero, KeyItem) as (h, k) {
+    keys = keys + 1;
+    destroy k;
+    msg("Voce pegou a Chave Antiga de Ferro [k]!", "yellow");
+    beep(880, 50);
+}
+
+// Abertura do Bau de Tesouro
+on collision(Hero, Chest) as (h, c) {
+    gold = gold + c.value;
+    destroy c;
+    msg("Bau aberto! Encontrou 100 Moedas de Ouro!", "yellow");
+    beep(950, 70);
+}
+
+// Pocao de cura
+on collision(Hero, Potion) as (h, p) {
+    hp = hp + p.heal;
+    if (hp > 100) {
+        hp = 100;
+    }
+    destroy p;
+    msg("Pocao magica consumida! (+40 HP)", "magenta");
+    beep(600, 40);
+}
+
+// Combate com o Orc Monstro
+on collision(Hero, Monster) as (h, m) {
+    hp = hp - 15;
+    m.hp = m.hp - 15;
+    beep(180, 40);
+    if (m.hp <= 0) {
+        destroy m;
+        gold = gold + 30;
+        msg("O Monstro foi derrotado! +30 Ouro!", "green");
+    } else {
+        msg("Duelo feroz com o Monstro! Voce tomou 15 de dano!", "red");
+    }
+    if (hp <= 0) {
+        hp = 0;
+        msg("Voce pereceu nas catacumbas... [ESC/Q para sair]", "red");
+    }
+}
+
+// Combate com o Esqueleto
+on collision(Hero, Skeleton) as (h, s) {
+    hp = hp - 10;
+    s.hp = s.hp - 15;
+    beep(220, 30);
+    if (s.hp <= 0) {
+        destroy s;
+        gold = gold + 15;
+        msg("O Esqueleto virou po! +15 Ouro!", "green");
+    } else {
+        msg("O Esqueleto te atingiu com a espada gasta! -10 HP", "red");
+    }
+    if (hp <= 0) {
+        hp = 0;
+        msg("Voce pereceu nas catacumbas... [ESC/Q para sair]", "red");
+    }
+}
