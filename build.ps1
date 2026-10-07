@@ -14,6 +14,7 @@ $sources = @(
     "src/Bytecode.cpp",
     "src/Compiler.cpp",
     "src/Engine.cpp",
+    "src/GpuRenderer.cpp",
     "src/Lexer.cpp",
     "src/Parser.cpp",
     "src/VM.cpp",

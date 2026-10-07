@@ -6,6 +6,7 @@
 #include "Engine.h"
 #include "Transpiler.h"
 #include "Version.h"
+#include "GpuRenderer.h"
 
 using namespace GameLang;
 
@@ -37,9 +38,11 @@ static void printHelp() {
     std::cout << "  \033[1;32m--safe-mode / -f\033[0m       (Padrao) Isola erros de runtime e parsing para evitar crash\n";
     std::cout << "  \033[1;32m--ignore-errors\033[0m        Continua execucao mesmo com erros pontuais de sintaxe\n";
     std::cout << "  \033[1;32m--strict\033[0m               Modo estrito: interrompe na primeira falha\n\n";
+    std::cout << "Opcoes Graficas e Otimizacao:\n";
+    std::cout << "  \033[1;35m--gpu\033[0m                  Aceleracao de renderizacao 2D via GPU + Otimizacao de Bytecode Rust\n\n";
     std::cout << "Exemplos:\n";
     std::cout << "  gamec run games/space_invaders.game\n";
-    std::cout << "  gamec run games/rpg_dungeon.game\n";
+    std::cout << "  gamec run games/rpg_dungeon.game --gpu\n";
     std::cout << "  gamec build games/rpg_dungeon.game -o bin/rpg.exe\n";
     std::cout << "  gamec transpile games/pong.game -o pong.cpp\n\n";
 }
@@ -75,6 +78,7 @@ int main(int argc, char* argv[]) {
 
     bool safeMode = true;
     bool strictMode = false;
+    bool useGpu = false;
     for (int i = 3; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--strict") {
@@ -83,6 +87,8 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--safe" || arg == "--safe-mode" || arg == "-f" || arg == "--ignore-errors") {
             safeMode = true;
             strictMode = false;
+        } else if (arg == "--gpu") {
+            useGpu = true;
         }
     }
 
@@ -233,6 +239,34 @@ int main(int argc, char* argv[]) {
 
     // Handle run
     if (cmd == "run") {
+        if (useGpu) {
+            std::cout << "\033[1;35m[GameForge GPU]\033[0m Inicializando pipeline grafico 2D acelerado por GPU...\n";
+            std::cout << "  Backend: " << (GameForge::GpuRenderer2D::isRustAvailable() ? "Rust FFI Nativo (gameforge_gpu.dll)" : "Hardware Batching / C++ Fallback") << "\n";
+            
+            // Aplica otimizador Rust de bytecode nas chunks compiladas
+            size_t optCount = 0;
+            auto optUpdate = GameForge::GpuRenderer2D::optimizeBytecodeWithRust(compiledGame->updateChunk.code);
+            if (optUpdate.size() < compiledGame->updateChunk.code.size()) {
+                optCount += (compiledGame->updateChunk.code.size() - optUpdate.size());
+                compiledGame->updateChunk.code = std::move(optUpdate);
+            }
+            auto optRender = GameForge::GpuRenderer2D::optimizeBytecodeWithRust(compiledGame->renderChunk.code);
+            if (optRender.size() < compiledGame->renderChunk.code.size()) {
+                optCount += (compiledGame->renderChunk.code.size() - optRender.size());
+                compiledGame->renderChunk.code = std::move(optRender);
+            }
+            for (auto& kv : compiledGame->functions) {
+                auto optFn = GameForge::GpuRenderer2D::optimizeBytecodeWithRust(kv.second.chunk.code);
+                if (optFn.size() < kv.second.chunk.code.size()) {
+                    optCount += (kv.second.chunk.code.size() - optFn.size());
+                    kv.second.chunk.code = std::move(optFn);
+                }
+            }
+            if (optCount > 0) {
+                std::cout << "  \033[1;32m[Rust Optimizer]\033[0m Otimizacoes aplicadas ao bytecode: " << optCount << " instrucoes podadas/otimizadas\n";
+            }
+        }
+
         Engine engine(compiledGame->config.width,
                       compiledGame->config.height,
                       compiledGame->config.fps,

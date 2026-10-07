@@ -1,0 +1,14 @@
+[package]
+name = "gameforge_gpu"
+version = "0.0.1"
+edition = "2021"
+authors = ["Guilherme Nascimento <guines002@hotmail.com>"]
+description = "Hardware-accelerated 2D GPU rendering and high-performance bytecode optimization for GameForge"
+license = "MIT"
+
+[lib]
+name = "gameforge_gpu"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# Sem dependências externas pesadas obrigatórias para máxima portabilidade FFI

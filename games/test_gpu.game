@@ -1,0 +1,28 @@
+// ==========================================
+// Teste de Renderizador GPU 2D
+// ==========================================
+
+game "GPU Benchmark" {
+    width: 60,
+    height: 20,
+    fps: 30
+}
+
+var hero = 0;
+
+entity Hero {
+    var x = 10;
+    var y = 10;
+    var symbol = "@";
+    var color = "green";
+}
+
+init {
+    hero = spawn Hero;
+    msg("GPU Pipeline Inicializado com Sucesso!", "cyan");
+    tile(5, 5, "#", "yellow", true);
+}
+
+update {
+    // Atualizacao de frame
+}
