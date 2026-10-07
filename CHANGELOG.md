@@ -21,6 +21,17 @@ e este projeto adere ao [Semantic Versioning (SemVer 2.0.0)](https://semver.org/
   - HUD RPG automático na barra inferior para variáveis globais temáticas `hp` (vermelho) e `gold` (amarelo).
 - **Jogo de Demonstração RPG:**
   - `games/rpg_dungeon.game`: Masmorra completa com múltiplas salas, corredores, porta com fechadura de chave de ferro `k`, fonte sagrada regenerativa `~`, baú com tesouro `$`, monstros `M` e esqueletos `S`.
+- **Gerenciamento Inteligente de Memória:**
+  - Header `include/MemoryPool.h` introduzindo `MemoryArena` (Bump allocator contíguo com reset $O(1)$).
+  - `ObjectPool<T>`: Pool genérico de objetos com *free-list* reaproveitada e zero fragmentação de heap.
+  - Reciclagem ativa de entidades no motor (`Engine::spawn` / `destroy`) e no transpilador C++ AOT.
+  - Reuso de buffer pré-alocado de string de renderização em `Engine::present()`.
+- **Arquitetura Multi-Thread:**
+  - Header `include/ThreadPool.h` com fila de tarefas thread-safe e particionamento `parallel_for`.
+  - Processamento paralelo de colisões (`checkCollisions`) distribuído pelos núcleos da CPU.
+  - Worker thread de áudio assíncrono em background, eliminando congelamentos de frame por chamadas de sistema síncronas de som (`Beep`).
+- **Suíte de Testes de Performance:**
+  - `tests/test_performance.cpp`: Testes unitários validando a arena, reciclagem do pool, threads paralelas e latência de áudio.
 - **Padrões de Versionamento e Patch:**
   - Header C++ centralizado `include/Version.h` definindo macros e constantes SemVer (`VERSION_MAJOR`, `VERSION_MINOR`, `VERSION_PATCH`, `VERSION_STRING`, `VERSION_TAG`).
   - Arquivo de versão `VERSION` na raiz do repositório.

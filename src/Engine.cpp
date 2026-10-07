@@ -11,10 +11,41 @@ Engine::Engine(int width, int height, int fps, const std::string& title)
     mapWidth = width;
     mapHeight = height;
     tiles.resize(mapWidth * mapHeight, Tile{' ', Color::Default, false});
+    frameBuffer.reserve(width * height * 12);
     lastFrameTime = std::chrono::steady_clock::now();
+
+    // Inicia worker thread de audio em background (nao bloqueante)
+    audioThread = std::thread([this]() {
+        while (this->audioRunning) {
+            AudioRequest req{0, 0};
+            {
+                std::unique_lock<std::mutex> lock(this->audioMutex);
+                this->audioCv.wait(lock, [this]() {
+                    return !this->audioRunning || !this->audioQueue.empty();
+                });
+                if (!this->audioRunning && this->audioQueue.empty()) {
+                    break;
+                }
+                req = this->audioQueue.front();
+                this->audioQueue.pop();
+            }
+#ifdef _WIN32
+            if (req.freq > 0 && req.durationMs > 0) {
+                Beep(req.freq, std::min(req.durationMs, 50));
+            }
+#endif
+        }
+    });
 }
 
 Engine::~Engine() {
+    // Encerra audio worker e thread pool de forma segura
+    audioRunning = false;
+    audioCv.notify_all();
+    if (audioThread.joinable()) {
+        audioThread.join();
+    }
+    threadPool.shutdown();
     resetTerminal();
 }
 
@@ -138,9 +169,8 @@ void Engine::setMessage(const std::string& msg, Color color) {
 }
 
 void Engine::present() {
-    std::string frame;
-    frame.reserve(width * height * 12);
-    frame += "\033[H"; // Move to home (0,0)
+    frameBuffer.clear();
+    frameBuffer += "\033[H"; // Move to home (0,0)
 
     Color currentColor = Color::Default;
 
@@ -148,19 +178,19 @@ void Engine::present() {
         for (int x = 0; x < width; ++x) {
             const Pixel& p = backBuffer[y * width + x];
             if (p.color != currentColor) {
-                frame += colorToAnsi(p.color);
+                frameBuffer += colorToAnsi(p.color);
                 currentColor = p.color;
             }
-            frame += p.ch;
+            frameBuffer += p.ch;
         }
-        frame += "\n";
+        frameBuffer += "\n";
     }
 
     if (currentColor != Color::Default) {
-        frame += "\033[0m";
+        frameBuffer += "\033[0m";
     }
 
-    std::cout << frame << std::flush;
+    std::cout << frameBuffer << std::flush;
     frontBuffer = backBuffer;
 }
 
@@ -250,20 +280,35 @@ bool Engine::isKeyPressed(const std::string& key) const {
 }
 
 uint32_t Engine::spawn(const std::string& type, const std::unordered_map<std::string, Value>& defaults) {
-    uint32_t id = nextEntityId++;
-    Entity ent;
-    ent.id = id;
-    ent.type = type;
-    ent.active = true;
-    ent.fields = defaults;
-    entities[id] = std::move(ent);
+    uint32_t id;
+    if (!freeEntityIds.empty()) {
+        id = freeEntityIds.back();
+        freeEntityIds.pop_back();
+        recycledEntityCount++;
+
+        Entity& ent = entities[id];
+        ent.id = id;
+        ent.type = type;
+        ent.active = true;
+        ent.fields = defaults;
+    } else {
+        id = nextEntityId++;
+        Entity ent;
+        ent.id = id;
+        ent.type = type;
+        ent.active = true;
+        ent.fields = defaults;
+        entities[id] = std::move(ent);
+    }
     return id;
 }
 
 void Engine::destroy(uint32_t id) {
     auto it = entities.find(id);
-    if (it != entities.end()) {
+    if (it != entities.end() && it->second.active) {
         it->second.active = false;
+        it->second.fields.clear();
+        freeEntityIds.push_back(id);
     }
 }
 
@@ -289,36 +334,73 @@ std::vector<std::pair<uint32_t, uint32_t>> Engine::checkCollisions(const std::st
     std::vector<std::pair<uint32_t, uint32_t>> hits;
     auto listA = getActiveEntitiesByType(typeA);
     auto listB = getActiveEntitiesByType(typeB);
+    if (listA.empty() || listB.empty()) return hits;
 
-    for (uint32_t idA : listA) {
-        Entity* eA = getEntity(idA);
-        if (!eA || !eA->active) continue;
+    size_t totalPairs = listA.size() * listB.size();
 
-        for (uint32_t idB : listB) {
-            if (idA == idB) continue;
-            Entity* eB = getEntity(idB);
-            if (!eB || !eB->active) continue;
+    // Se houver volume expressivo de pares e mais de 1 thread disponivel, paraleliza
+    if (totalPairs >= 32 && threadPool.getThreadCount() > 1) {
+        std::vector<std::vector<std::pair<uint32_t, uint32_t>>> threadHits(listA.size());
+
+        threadPool.parallel_for(0, listA.size(), [&](size_t idx) {
+            uint32_t idA = listA[idx];
+            Entity* eA = getEntity(idA);
+            if (!eA || !eA->active) return;
 
             int ax = static_cast<int>(std::round(eA->getX()));
             int ay = static_cast<int>(std::round(eA->getY()));
-            int bx = static_cast<int>(std::round(eB->getX()));
-            int by = static_cast<int>(std::round(eB->getY()));
 
-            if (ax == bx && ay == by) {
-                hits.push_back({idA, idB});
+            for (uint32_t idB : listB) {
+                if (idA == idB) continue;
+                Entity* eB = getEntity(idB);
+                if (!eB || !eB->active) continue;
+
+                int bx = static_cast<int>(std::round(eB->getX()));
+                int by = static_cast<int>(std::round(eB->getY()));
+
+                if (ax == bx && ay == by) {
+                    threadHits[idx].push_back({idA, idB});
+                }
+            }
+        });
+
+        for (const auto& thHit : threadHits) {
+            hits.insert(hits.end(), thHit.begin(), thHit.end());
+        }
+    } else {
+        // Fast path sequencial para cenarios pequenos
+        for (uint32_t idA : listA) {
+            Entity* eA = getEntity(idA);
+            if (!eA || !eA->active) continue;
+
+            for (uint32_t idB : listB) {
+                if (idA == idB) continue;
+                Entity* eB = getEntity(idB);
+                if (!eB || !eB->active) continue;
+
+                int ax = static_cast<int>(std::round(eA->getX()));
+                int ay = static_cast<int>(std::round(eA->getY()));
+                int bx = static_cast<int>(std::round(eB->getX()));
+                int by = static_cast<int>(std::round(eB->getY()));
+
+                if (ax == bx && ay == by) {
+                    hits.push_back({idA, idB});
+                }
             }
         }
     }
+
     return hits;
 }
 
 void Engine::playBeep(int freq, int durationMs) {
-#ifdef _WIN32
-    // Run short beep
     if (freq > 0 && durationMs > 0) {
-        Beep(freq, std::min(durationMs, 50));
+        {
+            std::lock_guard<std::mutex> lock(audioMutex);
+            audioQueue.push({freq, durationMs});
+        }
+        audioCv.notify_one();
     }
-#endif
 }
 
 int Engine::getRandomInt(int minVal, int maxVal) {

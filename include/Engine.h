@@ -2,6 +2,13 @@
 
 #include "Common.h"
 #include "Bytecode.h"
+#include "MemoryPool.h"
+#include "ThreadPool.h"
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 namespace GameLang {
 
@@ -64,17 +71,18 @@ public:
     bool isKeyDown(const std::string& key) const;
     bool isKeyPressed(const std::string& key) const;
 
-    // Entity manager
+    // Entity manager com Reciclagem Inteligente
     uint32_t spawn(const std::string& type, const std::unordered_map<std::string, Value>& defaults);
     void destroy(uint32_t id);
     Entity* getEntity(uint32_t id);
     std::vector<uint32_t> getActiveEntitiesByType(const std::string& type) const;
     const std::unordered_map<uint32_t, Entity>& getAllEntities() const { return entities; }
+    size_t getRecycledEntityCount() const { return recycledEntityCount; }
 
-    // Collision detection
+    // Collision detection (Paralelo via ThreadPool)
     std::vector<std::pair<uint32_t, uint32_t>> checkCollisions(const std::string& typeA, const std::string& typeB);
 
-    // Audio & Utilities
+    // Audio & Utilities (Audio assíncrono não bloqueante)
     void playBeep(int freq, int durationMs);
     int getRandomInt(int minVal, int maxVal);
 
@@ -122,8 +130,25 @@ private:
     std::vector<Pixel> frontBuffer;
     std::vector<Pixel> backBuffer;
 
+    // Gerenciamento e reciclagem inteligente de entidades
     uint32_t nextEntityId = 1;
     std::unordered_map<uint32_t, Entity> entities;
+    std::vector<uint32_t> freeEntityIds;
+    size_t recycledEntityCount = 0;
+
+    // Reuso de buffer de string de renderizacao
+    std::string frameBuffer;
+
+    // Arquitetura Multi-thread
+    GameForge::ThreadPool threadPool;
+
+    // Background Audio Worker (Non-blocking)
+    struct AudioRequest { int freq; int durationMs; };
+    std::queue<AudioRequest> audioQueue;
+    std::mutex audioMutex;
+    std::condition_variable audioCv;
+    std::thread audioThread;
+    std::atomic<bool> audioRunning{true};
 
     std::unordered_map<std::string, bool> keysDown;
     std::unordered_map<std::string, bool> keysPressed;

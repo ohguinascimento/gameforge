@@ -78,6 +78,10 @@ std::string Transpiler::transpileToCpp(const Program& program) {
     ss << "#include <memory>\n";
     ss << "#include <chrono>\n";
     ss << "#include <thread>\n";
+    ss << "#include <queue>\n";
+    ss << "#include <mutex>\n";
+    ss << "#include <condition_variable>\n";
+    ss << "#include <atomic>\n";
     ss << "#include <cmath>\n";
     ss << "#include <random>\n";
     ss << "#include <algorithm>\n";
@@ -255,6 +259,15 @@ namespace GameRuntime {
         std::unordered_map<std::string, bool> keysPressed;
         std::vector<std::shared_ptr<BaseEntity>> entities;
         std::chrono::steady_clock::time_point lastFrameTime;
+        std::string frameBuffer;
+
+        struct AudioReq { int freq; int dur; };
+        std::queue<AudioReq> audioQueue;
+        std::mutex audioMutex;
+        std::condition_variable audioCv;
+        std::thread audioThread;
+        std::atomic<bool> audioRunning{true};
+
         #ifdef _WIN32
         HANDLE hConsole = nullptr;
         DWORD originalMode = 0;
@@ -265,7 +278,32 @@ namespace GameRuntime {
             mapWidth = w;
             mapHeight = h;
             tiles.resize(w * h, Tile{' ', Color::Default, false});
+            frameBuffer.reserve(w * h * 12);
             lastFrameTime = std::chrono::steady_clock::now();
+
+            audioThread = std::thread([this]() {
+                while (this->audioRunning) {
+                    AudioReq req{0, 0};
+                    {
+                        std::unique_lock<std::mutex> lock(this->audioMutex);
+                        this->audioCv.wait(lock, [this]() {
+                            return !this->audioRunning || !this->audioQueue.empty();
+                        });
+                        if (!this->audioRunning && this->audioQueue.empty()) break;
+                        req = this->audioQueue.front();
+                        this->audioQueue.pop();
+                    }
+                    #ifdef _WIN32
+                    if (req.freq > 0 && req.dur > 0) Beep(req.freq, std::min(req.dur, 40));
+                    #endif
+                }
+            });
+        }
+
+        ~Engine() {
+            audioRunning = false;
+            audioCv.notify_all();
+            if (audioThread.joinable()) audioThread.join();
         }
 
         void setMapSize(int w, int h) {
@@ -366,18 +404,19 @@ namespace GameRuntime {
         }
 
         void present() {
-            std::string frame = "\033[H";
+            frameBuffer.clear();
+            frameBuffer += "\033[H";
             Color cur = Color::Default;
             for (int y = 0; y < height; ++y) {
                 for (int x = 0; x < width; ++x) {
                     const auto& p = backBuffer[y * width + x];
-                    if (p.color != cur) { frame += colorToAnsi(p.color); cur = p.color; }
-                    frame += p.ch;
+                    if (p.color != cur) { frameBuffer += colorToAnsi(p.color); cur = p.color; }
+                    frameBuffer += p.ch;
                 }
-                frame += "\n";
+                frameBuffer += "\n";
             }
-            if (cur != Color::Default) frame += "\033[0m";
-            std::cout << frame << std::flush;
+            if (cur != Color::Default) frameBuffer += "\033[0m";
+            std::cout << frameBuffer << std::flush;
         }
 
         void pollInput() {
@@ -424,9 +463,13 @@ namespace GameRuntime {
         }
 
         void playBeep(int freq, int dur) {
-            #ifdef _WIN32
-            if (freq > 0 && dur > 0) Beep(freq, std::min(dur, 40));
-            #endif
+            if (freq > 0 && dur > 0) {
+                {
+                    std::lock_guard<std::mutex> lock(audioMutex);
+                    audioQueue.push({freq, dur});
+                }
+                audioCv.notify_one();
+            }
         }
 
         int getRandomInt(int minVal, int maxVal) {
@@ -500,9 +543,17 @@ namespace GameRuntime {
     }
     ss << "\n";
 
-    // Spawn helper template
+    // Spawn helper template com Reciclagem Inteligente de Memoria
     for (const auto& entity : program.entities) {
         ss << "std::shared_ptr<Entity_" << entity->name << "> spawn_" << entity->name << "() {\n";
+        ss << "    for (auto& recycled : entities_" << entity->name << ") {\n";
+        ss << "        if (!recycled->active) {\n";
+        ss << "            recycled->active = true;\n";
+        ss << "            *recycled = Entity_" << entity->name << "();\n";
+        ss << "            recycled->id = engine.nextId++;\n";
+        ss << "            return recycled;\n";
+        ss << "        }\n";
+        ss << "    }\n";
         ss << "    auto e = std::make_shared<Entity_" << entity->name << ">();\n";
         ss << "    e->id = engine.nextId++;\n";
         ss << "    entities_" << entity->name << ".push_back(e);\n";
