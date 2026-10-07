@@ -1,0 +1,118 @@
+// ==========================================
+// Pong Retro Arcade em GameForge
+// ==========================================
+
+game "Pong Arcade" {
+    width: 60,
+    height: 22,
+    fps: 30
+}
+
+var score = 0;
+var aiScore = 0;
+var lives = 5;
+
+var playerPaddle = 0;
+var aiPaddle = 0;
+var ball = 0;
+
+entity Paddle {
+    var x = 3;
+    var y = 10;
+    var symbol = "|";
+    var color = "cyan";
+}
+
+entity AIPaddle {
+    var x = 56;
+    var y = 10;
+    var symbol = "]";
+    var color = "red";
+}
+
+entity Ball {
+    var x = 30;
+    var y = 11;
+    var vx = 1;
+    var vy = 1;
+    var symbol = "O";
+    var color = "yellow";
+}
+
+init {
+    playerPaddle = spawn Paddle;
+    playerPaddle.x = 4;
+    playerPaddle.y = 10;
+
+    aiPaddle = spawn AIPaddle;
+    aiPaddle.x = 55;
+    aiPaddle.y = 10;
+
+    ball = spawn Ball;
+    ball.x = 30;
+    ball.y = 11;
+    ball.vx = 1;
+    ball.vy = 1;
+}
+
+update {
+    // Controles do jogador (Cima / Baixo ou W / S)
+    if (key("UP") && playerPaddle.y > 2) {
+        playerPaddle.y = playerPaddle.y - 1;
+    }
+    if (key("DOWN") && playerPaddle.y < 19) {
+        playerPaddle.y = playerPaddle.y + 1;
+    }
+
+    // IA do oponente
+    if (ball.x > 25) {
+        if (aiPaddle.y < ball.y && aiPaddle.y < 19) {
+            aiPaddle.y = aiPaddle.y + 0.6;
+        }
+        if (aiPaddle.y > ball.y && aiPaddle.y > 2) {
+            aiPaddle.y = aiPaddle.y - 0.6;
+        }
+    }
+
+    // Rebater nas paredes superior e inferior
+    if (ball.y <= 2) {
+        ball.vy = 1;
+        beep(400, 15);
+    }
+    if (ball.y >= 20) {
+        ball.vy = -1;
+        beep(400, 15);
+    }
+
+    // Ponto para IA
+    if (ball.x <= 2) {
+        lives = lives - 1;
+        beep(200, 80);
+        ball.x = 30;
+        ball.y = 11;
+        ball.vx = 1;
+        ball.vy = 1;
+    }
+
+    // Ponto para Jogador
+    if (ball.x >= 58) {
+        score = score + 1;
+        beep(900, 50);
+        ball.x = 30;
+        ball.y = 11;
+        ball.vx = -1;
+        ball.vy = -1;
+    }
+}
+
+// Colisao: Bola bate na raquete do jogador
+on collision(Ball, Paddle) as (b, p) {
+    b.vx = 1;
+    beep(700, 20);
+}
+
+// Colisao: Bola bate na raquete da IA
+on collision(Ball, AIPaddle) as (b, ai) {
+    b.vx = -1;
+    beep(600, 20);
+}

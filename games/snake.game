@@ -1,0 +1,84 @@
+// ==========================================
+// Snake Retro em GameForge
+// ==========================================
+
+game "Snake Classic" {
+    width: 50,
+    height: 20,
+    fps: 15
+}
+
+var score = 0;
+var lives = 1;
+var dirX = 1;
+var dirY = 0;
+var snake = 0;
+var apple = 0;
+
+entity SnakeHead {
+    var x = 25;
+    var y = 10;
+    var symbol = "@";
+    var color = "green";
+}
+
+entity Food {
+    var x = 10;
+    var y = 10;
+    var symbol = "*";
+    var color = "red";
+}
+
+init {
+    snake = spawn SnakeHead;
+    snake.x = 25;
+    snake.y = 10;
+
+    apple = spawn Food;
+    apple.x = 35;
+    apple.y = 10;
+}
+
+update {
+    // Teclas de direcao
+    if (key("UP") && dirY == 0) {
+        dirX = 0;
+        dirY = -1;
+    }
+    if (key("DOWN") && dirY == 0) {
+        dirX = 0;
+        dirY = 1;
+    }
+    if (key("LEFT") && dirX == 0) {
+        dirX = -1;
+        dirY = 0;
+    }
+    if (key("RIGHT") && dirX == 0) {
+        dirX = 1;
+        dirY = 0;
+    }
+
+    snake.x = snake.x + dirX;
+    snake.y = snake.y + dirY;
+
+    // Colisao com bordas (wrap-around)
+    if (snake.x <= 1) {
+        snake.x = 48;
+    }
+    if (snake.x >= 49) {
+        snake.x = 2;
+    }
+    if (snake.y <= 1) {
+        snake.y = 18;
+    }
+    if (snake.y >= 19) {
+        snake.y = 2;
+    }
+}
+
+on collision(SnakeHead, Food) as (s, f) {
+    score = score + 50;
+    beep(950, 30);
+    f.x = random(4, 45);
+    f.y = random(3, 16);
+}

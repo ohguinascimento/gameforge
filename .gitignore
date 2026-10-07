@@ -1,0 +1,9 @@
+# Binaries & Build
+bin/
+build/
+*.exe
+_temp_build.cpp
+
+# IDE
+.vscode/
+.idea/

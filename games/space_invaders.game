@@ -1,0 +1,134 @@
+// ==========================================
+// Space Invaders em GameForge
+// ==========================================
+
+game "Space Invaders Retro" {
+    width: 60,
+    height: 24,
+    fps: 30
+}
+
+// Variaveis globais de estado
+var score = 0;
+var lives = 3;
+var player = 0;
+var alienTimer = 0;
+var alienDir = 1;
+var shootCooldown = 0;
+var gameOver = 0;
+
+// Definicao de Entidades
+entity Player {
+    var x = 30;
+    var y = 21;
+    var symbol = "A";
+    var color = "cyan";
+}
+
+entity Alien {
+    var x = 0;
+    var y = 0;
+    var vx = 0;
+    var symbol = "W";
+    var color = "magenta";
+}
+
+entity Bullet {
+    var x = 0;
+    var y = 0;
+    var vy = -1;
+    var symbol = "|";
+    var color = "yellow";
+}
+
+entity Star {
+    var x = 0;
+    var y = 0;
+    var symbol = ".";
+    var color = "white";
+}
+
+// Inicializacao do cenario e frotas
+init {
+    player = spawn Player;
+    player.x = 30;
+    player.y = 21;
+
+    // Criar estrelas de fundo
+    var s = 0;
+    while (s < 15) {
+        var star = spawn Star;
+        star.x = random(2, 58);
+        star.y = random(2, 22);
+        s = s + 1;
+    }
+
+    // Gerar esquadrao de aliens
+    var row = 3;
+    while (row <= 7) {
+        var col = 12;
+        while (col <= 48) {
+            var al = spawn Alien;
+            al.x = col;
+            al.y = row;
+            if (row == 3) {
+                al.symbol = "M";
+                al.color = "red";
+            }
+            if (row == 5) {
+                al.symbol = "W";
+                al.color = "magenta";
+            }
+            if (row == 7) {
+                al.symbol = "V";
+                al.color = "green";
+            }
+            col = col + 6;
+        }
+        row = row + 2;
+    }
+}
+
+// Loop de atualizacao por frame
+update {
+    if (gameOver == 1) {
+        return;
+    }
+
+    // Controles do jogador
+    if (key("LEFT") && player.x > 2) {
+        player.x = player.x - 1;
+    }
+    if (key("RIGHT") && player.x < 57) {
+        player.x = player.x + 1;
+    }
+
+    // Disparo de laser
+    if (shootCooldown > 0) {
+        shootCooldown = shootCooldown - 1;
+    }
+
+    if (key("SPACE") && shootCooldown == 0) {
+        var b = spawn Bullet;
+        b.x = player.x;
+        b.y = player.y - 1;
+        b.vy = -1;
+        shootCooldown = 3;
+        beep(880, 15);
+    }
+
+    // Vitoria: todos aliens eliminados
+    if (count("Alien") == 0) {
+        score = score + 1000;
+        beep(1200, 100);
+        gameOver = 1;
+    }
+}
+
+// Tratador de colisoes: Projetil atinge Alien
+on collision(Bullet, Alien) as (proj, target) {
+    destroy proj;
+    destroy target;
+    score = score + 100;
+    beep(500, 25);
+}
