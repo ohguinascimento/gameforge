@@ -3,6 +3,8 @@
 #include "Common.h"
 #include "Bytecode.h"
 #include "Engine.h"
+#include "TimeEngine.h"
+#include "DebugInspector.h"
 
 namespace GameLang {
 
@@ -29,6 +31,12 @@ public:
     const std::vector<std::string>& getErrorLog() const { return errorLog; }
     const std::string& getLastIsolatedError() const { return lastIsolatedError; }
 
+    GameForge::Time::TemporalBuffer<300>& getTemporalBuffer() { return temporalBuffer; }
+    const GameForge::Time::TemporalBuffer<300>& getTemporalBuffer() const { return temporalBuffer; }
+
+    GameForge::Debug::DebugInspector& getInspector() { return inspector; }
+    const GameForge::Debug::DebugInspector& getInspector() const { return inspector; }
+
 private:
     struct CallFrame {
         const Chunk* chunk = nullptr;
@@ -53,6 +61,12 @@ private:
     std::vector<Value> stack;
     std::vector<CallFrame> frames;
     std::unordered_map<std::string, Value> globals;
+
+    // Temporal Spectrum & Live Debugging Subsystems
+    GameForge::Time::TemporalBuffer<300> temporalBuffer;
+    std::vector<GameForge::Time::TemporalEcho> temporalEchoes;
+    GameForge::Debug::DebugInspector inspector;
+    std::unordered_map<std::string, int> frozenTypes;
 
     bool hasError = false;
     bool safeMode = true;

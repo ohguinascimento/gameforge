@@ -215,6 +215,8 @@ void Engine::pollInput() {
         } else if (ch == 27) {
             keyName = "ESC";
             requestExit();
+        } else if (ch == 9) {
+            keyName = "TAB";
         } else if (ch == 32) {
             keyName = "SPACE";
         } else if (ch == 13) {
@@ -251,6 +253,11 @@ void Engine::pollInput() {
     checkAsync(VK_UP, "UP");
     checkAsync(VK_DOWN, "DOWN");
     checkAsync(VK_SPACE, "SPACE");
+    checkAsync(VK_TAB, "TAB");
+    checkAsync('G', "G");
+    checkAsync('R', "R");
+    checkAsync(VK_OEM_4, "[");
+    checkAsync(VK_OEM_6, "]");
     checkAsync('A', "A");
     checkAsync('D', "D");
     checkAsync('W', "W");

@@ -9,7 +9,8 @@ bool SemanticAnalyzer::isBuiltinFunction(const std::string& name) const {
         "count", "tile", "tile_at", "tile_solid", "map_box", "map_row",
         "camera", "msg", "dialog", "clear_msg", "color", "print", "len",
         "dist", "clamp", "min", "max", "draw_rect", "draw_box", "draw_text",
-        "set_bloom", "set_scanlines", "set_light"
+        "set_bloom", "set_scanlines", "set_light",
+        "time_rewind", "time_scale", "spawn_echo", "freeze_type", "god_mode", "tweak_var"
     };
     return builtins.find(name) != builtins.end();
 }

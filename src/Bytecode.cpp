@@ -47,6 +47,11 @@ const char* opCodeName(OpCode op) {
         case OpCode::OP_MAP_ROW: return "OP_MAP_ROW";
         case OpCode::OP_CAMERA_SET: return "OP_CAMERA_SET";
         case OpCode::OP_SET_MESSAGE: return "OP_SET_MESSAGE";
+        case OpCode::OP_TIME_REWIND: return "OP_TIME_REWIND";
+        case OpCode::OP_SET_TIMESCALE: return "OP_SET_TIMESCALE";
+        case OpCode::OP_SPAWN_ECHO: return "OP_SPAWN_ECHO";
+        case OpCode::OP_FREEZE_TYPE: return "OP_FREEZE_TYPE";
+        case OpCode::OP_SET_GODMODE: return "OP_SET_GODMODE";
         default: return "OP_UNKNOWN";
     }
 }

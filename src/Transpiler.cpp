@@ -70,6 +70,12 @@ std::string Transpiler::transpileOpenGL(const Program& program) {
     for (const auto& g : program.globals) {
         if (g->initializer) collectExpr(g->initializer.get(), accessedMembers, calledFunctions);
     }
+    for (const auto& ent : program.entities) {
+        for (const auto& f : ent->fields) {
+            accessedMembers.insert(f.name);
+            if (f.defaultValue) collectExpr(f.defaultValue.get(), accessedMembers, calledFunctions);
+        }
+    }
     for (const auto& fn : program.functions) {
         if (fn->body) collectStmt(fn->body.get(), accessedMembers, calledFunctions);
     }
@@ -85,6 +91,8 @@ std::string Transpiler::transpileOpenGL(const Program& program) {
     ss << "// Pipeline: 1 Draw Call Instanciado, Virtual Canvas FBO, Shaders GLSL de Bloom/CRT\n";
     ss << "// ============================================================================\n";
     ss << "#include \"GpuEngineGL.h\"\n";
+    ss << "#include \"TimeEngine.h\"\n";
+    ss << "#include \"DebugInspector.h\"\n";
     ss << "#include <iostream>\n";
     ss << "#include <vector>\n";
     ss << "#include <string>\n";
@@ -239,7 +247,11 @@ std::string Transpiler::transpileOpenGL(const Program& program) {
     ss << "    static std::vector<std::shared_ptr<BaseEntity>> entities;\n";
     ss << "    static uint32_t nextEntityId = 1;\n";
     ss << "    static std::string hudMessage = \"\";\n";
-    ss << "    static double coordScale = 16.0;\n\n";
+    ss << "    static double coordScale = 16.0;\n";
+    ss << "    static GameForge::Time::TemporalBuffer<300> gTimeBuffer;\n";
+    ss << "    static std::vector<GameForge::Time::TemporalEcho> gEchoes;\n";
+    ss << "    static GameForge::Debug::DebugInspector gInspector;\n";
+    ss << "    static std::unordered_map<std::string, int> gFrozenTypes;\n\n";
 
     ss << R"RAW(
     inline bool key(const std::string& k) {
@@ -312,6 +324,54 @@ std::string Transpiler::transpileOpenGL(const Program& program) {
         }
         return c;
     }
+
+    inline void time_rewind(double frames = 60.0) {
+        GameForge::Time::WorldSnapshot snap;
+        if (gTimeBuffer.rewindWorld(static_cast<size_t>(frames), snap)) {
+            for (uint32_t i = 0; i < snap.entityCount; ++i) {
+                const auto& es = snap.entities[i];
+                for (auto& e : entities) {
+                    if (e->id == es.id) {
+                        e->active = es.active;
+                        e->x = es.x;
+                        e->y = es.y;
+                        e->vx = es.vx;
+                        e->vy = es.vy;
+                        e->hp = es.hp;
+                        break;
+                    }
+                }
+            }
+            beep(gTimeBuffer.getPitchShiftedFrequency(880), 40);
+        }
+    }
+
+    inline void time_scale(double s = 1.0) {
+        gTimeBuffer.setTimeScale(static_cast<float>(s));
+    }
+
+    inline void spawn_echo(const Value& entVal, double frames = 60.0) {
+        uint32_t entId = entVal.entity ? entVal.entity->id : static_cast<uint32_t>(entVal.num);
+        auto history = gTimeBuffer.getEntityHistory(entId, static_cast<size_t>(frames));
+        if (!history.empty()) {
+            GameForge::Time::TemporalEcho echo;
+            echo.targetEntityId = entId;
+            echo.trajectory = std::vector<GameForge::Time::EntitySnapshot>(history.rbegin(), history.rend());
+            echo.playbackIndex = 0;
+            echo.active = true;
+            gEchoes.push_back(std::move(echo));
+        }
+    }
+
+    inline void freeze_type(const std::string& type, double duration = 60.0) {
+        gFrozenTypes[type] = static_cast<int>(duration);
+    }
+
+    inline void god_mode(bool enabled = true) {
+        gInspector.setGodMode(enabled);
+    }
+
+    inline void tweak_var(const std::string& name, double minVal, double maxVal, double step = 1.0) {}
 )RAW";
 
     // Subclasses de Entidades
@@ -394,6 +454,15 @@ std::string Transpiler::transpileOpenGL(const Program& program) {
 
     // Hooks do Ciclo de Vida
     ss << "    void game_init() {\n";
+    for (const auto& g : program.globals) {
+        if (g->tweak.hasTweak) {
+            ss << "        GameRuntime::gInspector.registerVar(\"" << g->name << "\", &GameRuntime::" << g->name
+               << ".num, " << g->tweak.minVal << ", " << g->tweak.maxVal << ", " << g->tweak.step << ");\n";
+        }
+        if (g->name == "hp" || g->name == "player_hp") {
+            ss << "        GameRuntime::gInspector.registerPlayerHp(&GameRuntime::" << g->name << ".num, 100.0);\n";
+        }
+    }
     if (program.initBlock) transpileBlock(*program.initBlock, ss, 2);
     ss << "    }\n\n";
 
@@ -432,11 +501,44 @@ std::string Transpiler::transpileOpenGL(const Program& program) {
     ss << "    while (!engine.shouldClose()) {\n";
     ss << "        engine.beginFrame();\n\n";
 
-    ss << "        // 1. Atualizacao de fisica e movimento das entidades\n";
+    ss << "        // Input para Live-Tuning Inspector, God Mode e atalhos\n";
+    ss << "        static bool lastTab = false;\n";
+    ss << "        bool curTab = engine.isKeyDown(VK_TAB);\n";
+    ss << "        bool tabPressed = curTab && !lastTab;\n";
+    ss << "        lastTab = curTab;\n";
+    ss << "        static bool lastG = false;\n";
+    ss << "        bool curG = engine.isKeyDown('G');\n";
+    ss << "        bool gPressed = curG && !lastG;\n";
+    ss << "        lastG = curG;\n";
+    ss << "        static bool lastLBracket = false;\n";
+    ss << "        bool curLBracket = engine.isKeyDown(VK_OEM_4);\n";
+    ss << "        bool lBracketPressed = curLBracket && !lastLBracket;\n";
+    ss << "        lastLBracket = curLBracket;\n";
+    ss << "        static bool lastRBracket = false;\n";
+    ss << "        bool curRBracket = engine.isKeyDown(VK_OEM_6);\n";
+    ss << "        bool rBracketPressed = curRBracket && !lastRBracket;\n";
+    ss << "        lastRBracket = curRBracket;\n";
+    ss << "        GameRuntime::gInspector.handleInput(tabPressed, gPressed, lBracketPressed, rBracketPressed);\n\n";
+
+    ss << "        // God Mode ativo\n";
+    ss << "        if (GameRuntime::gInspector.isGodMode()) {\n";
+    ss << "            for (auto& e : GameRuntime::entities) {\n";
+    ss << "                if (e->type == \"Player\") e->hp = 100.0;\n";
+    ss << "            }\n";
+    ss << "        }\n\n";
+
+    ss << "        // Atualiza contadores de tipos congelados\n";
+    ss << "        for (auto it = GameRuntime::gFrozenTypes.begin(); it != GameRuntime::gFrozenTypes.end();) {\n";
+    ss << "            if (it->second > 0) { it->second--; ++it; } else { it = GameRuntime::gFrozenTypes.erase(it); }\n";
+    ss << "        }\n\n";
+
+    ss << "        // 1. Atualizacao de fisica e movimento das entidades com escala temporal\n";
+    ss << "        float dtScale = GameRuntime::gTimeBuffer.getTimeScale();\n";
     ss << "        for (auto& e : GameRuntime::entities) {\n";
     ss << "            if (e->active) {\n";
-    ss << "                e->x += e->vx;\n";
-    ss << "                e->y += e->vy;\n";
+    ss << "                if (GameRuntime::gFrozenTypes.find(e->type) != GameRuntime::gFrozenTypes.end()) continue;\n";
+    ss << "                e->x += e->vx * dtScale;\n";
+    ss << "                e->y += e->vy * dtScale;\n";
     ss << "            }\n";
     ss << "        }\n\n";
 
@@ -445,6 +547,25 @@ std::string Transpiler::transpileOpenGL(const Program& program) {
 
     ss << "        // 3. Hook de logica update do jogo\n";
     ss << "        GameRuntime::game_update();\n\n";
+
+    ss << "        // Gravacao O(1) de Snapshot Temporal no Ring Buffer\n";
+    ss << "        GameForge::Time::WorldSnapshot snap;\n";
+    ss << "        snap.timeScale = dtScale;\n";
+    ss << "        uint32_t snapIdx = 0;\n";
+    ss << "        for (const auto& e : GameRuntime::entities) {\n";
+    ss << "            if (snapIdx >= GameForge::Time::WorldSnapshot::MAX_SNAPSHOT_ENTITIES) break;\n";
+    ss << "            if (!e->active) continue;\n";
+    ss << "            auto& es = snap.entities[snapIdx++];\n";
+    ss << "            es.id = e->id;\n";
+    ss << "            es.x = static_cast<float>(e->x);\n";
+    ss << "            es.y = static_cast<float>(e->y);\n";
+    ss << "            es.vx = static_cast<float>(e->vx);\n";
+    ss << "            es.vy = static_cast<float>(e->vy);\n";
+    ss << "            es.hp = static_cast<float>(e->hp);\n";
+    ss << "            es.active = e->active;\n";
+    ss << "        }\n";
+    ss << "        snap.entityCount = snapIdx;\n";
+    ss << "        GameRuntime::gTimeBuffer.captureFrame(snap);\n\n";
 
     ss << "        // 4. Renderizacao em lote de todas as entidades (1 Draw Call para a GPU)\n";
     ss << "        for (auto& e : GameRuntime::entities) {\n";
@@ -464,6 +585,60 @@ std::string Transpiler::transpileOpenGL(const Program& program) {
 
     ss << "        // 5. Hook de renderizacao customizada do jogo\n";
     ss << "        GameRuntime::game_render();\n\n";
+
+    ss << "        // Rastro Espectral (Ghost Trails / After-Images translucidas na GPU)\n";
+    ss << "        for (const auto& e : GameRuntime::entities) {\n";
+    ss << "            if (e->active && e->type == \"Player\") {\n";
+    ss << "                auto hist = GameRuntime::gTimeBuffer.getEntityHistory(e->id, 8);\n";
+    ss << "                for (size_t h = 0; h < hist.size(); ++h) {\n";
+    ss << "                    float alpha = 0.35f * (1.0f - static_cast<float>(h) / 8.0f);\n";
+    ss << "                    float hpx = static_cast<float>(hist[h].x * GameRuntime::coordScale);\n";
+    ss << "                    float hpy = static_cast<float>(hist[h].y * GameRuntime::coordScale);\n";
+    ss << "                    float size = static_cast<float>(GameRuntime::coordScale);\n";
+    ss << "                    engine.drawRect(hpx, hpy, size, size, 0.2f, 0.8f, 1.0f, alpha, 0.8f);\n";
+    ss << "                }\n";
+    ss << "            }\n";
+    ss << "        }\n\n";
+
+    ss << "        // Renderiza Ecos Temporais\n";
+    ss << "        for (auto it = GameRuntime::gEchoes.begin(); it != GameRuntime::gEchoes.end();) {\n";
+    ss << "            GameForge::Time::EntitySnapshot echoFrame;\n";
+    ss << "            if (it->updateNextFrame(echoFrame)) {\n";
+    ss << "                float px = static_cast<float>(echoFrame.x * GameRuntime::coordScale);\n";
+    ss << "                float py = static_cast<float>(echoFrame.y * GameRuntime::coordScale);\n";
+    ss << "                float size = static_cast<float>(GameRuntime::coordScale);\n";
+    ss << "                engine.drawCircle(px + size * 0.5f, py + size * 0.5f, size * 0.6f, 0.2f, 0.95f, 1.0f, 0.6f, 1.5f);\n";
+    ss << "                ++it;\n";
+    ss << "            } else {\n";
+    ss << "                it = GameRuntime::gEchoes.erase(it);\n";
+    ss << "            }\n";
+    ss << "        }\n\n";
+
+    ss << "        // Live-Tuning Inspector HUD Overlay\n";
+    ss << "        if (GameRuntime::gInspector.isVisible()) {\n";
+    ss << "            engine.drawRect(16.0f, 16.0f, 320.0f, 190.0f, 0.04f, 0.05f, 0.12f, 0.85f, 0.0f);\n";
+    ss << "            engine.drawRect(14.0f, 14.0f, 324.0f, 194.0f, 0.2f, 0.6f, 1.0f, 0.4f, 0.6f);\n";
+    ss << "            engine.drawText(28.0f, 26.0f, \"LIVE-TUNING INSPECTOR\", 0.2f, 0.95f, 1.0f, 1.1f);\n";
+    ss << "            if (GameRuntime::gInspector.isGodMode()) {\n";
+    ss << "                engine.drawText(28.0f, 48.0f, \"[G] GOD MODE: ATIVO\", 0.2f, 1.0f, 0.2f, 1.0f);\n";
+    ss << "            } else {\n";
+    ss << "                engine.drawText(28.0f, 48.0f, \"[G] GOD MODE: DESATIVADO\", 0.8f, 0.8f, 0.8f, 1.0f);\n";
+    ss << "            }\n";
+    ss << "            float hr, hg, hb;\n";
+    ss << "            GameRuntime::gInspector.getHpColor(hr, hg, hb);\n";
+    ss << "            engine.drawText(28.0f, 68.0f, \"VIDA:\", 1.0f, 1.0f, 1.0f, 1.0f);\n";
+    ss << "            engine.drawRect(80.0f, 68.0f, 150.0f, 12.0f, 0.2f, 0.2f, 0.2f, 0.8f, 0.0f);\n";
+    ss << "            double hpRatio = GameRuntime::gInspector.getHpRatio();\n";
+    ss << "            engine.drawRect(80.0f, 68.0f, static_cast<float>(150.0 * hpRatio), 12.0f, hr, hg, hb, 0.95f, 1.5f);\n";
+    ss << "            const auto& vars = GameRuntime::gInspector.getVariables();\n";
+    ss << "            if (!vars.empty()) {\n";
+    ss << "                size_t sel = GameRuntime::gInspector.getSelectedIndex();\n";
+    ss << "                const auto& v = vars[sel];\n";
+    ss << "                std::string varStr = \"> \" + v.name + \": \" + std::to_string(static_cast<int>(v.ptr ? *v.ptr : 0));\n";
+    ss << "                engine.drawText(28.0f, 96.0f, varStr, 1.0f, 0.95f, 0.2f, 1.0f);\n";
+    ss << "                engine.drawText(28.0f, 116.0f, \"Ajuste: [ - ]  e  [ + ]\", 0.4f, 0.8f, 1.0f, 0.9f);\n";
+    ss << "            }\n";
+    ss << "        }\n\n";
 
     ss << "        // 6. Mensagens de HUD\n";
     ss << "        if (!GameRuntime::hudMessage.empty()) {\n";
@@ -498,6 +673,12 @@ std::string Transpiler::transpileConsole(const Program& program) {
     for (const auto& g : program.globals) {
         if (g->initializer) collectExpr(g->initializer.get(), accessedMembers, calledFunctions);
     }
+    for (const auto& ent : program.entities) {
+        for (const auto& f : ent->fields) {
+            accessedMembers.insert(f.name);
+            if (f.defaultValue) collectExpr(f.defaultValue.get(), accessedMembers, calledFunctions);
+        }
+    }
     for (const auto& fn : program.functions) {
         if (fn->body) collectStmt(fn->body.get(), accessedMembers, calledFunctions);
     }
@@ -527,7 +708,9 @@ std::string Transpiler::transpileConsole(const Program& program) {
     ss << "#define WIN32_LEAN_AND_MEAN\n";
     ss << "#include <windows.h>\n";
     ss << "#include <conio.h>\n";
-    ss << "#endif\n\n";
+    ss << "#endif\n";
+    ss << "#include \"TimeEngine.h\"\n";
+    ss << "#include \"DebugInspector.h\"\n\n";
 
     ss << R"RAW(
 namespace GameRuntime {
@@ -795,6 +978,12 @@ namespace GameRuntime {
         messageColor = parseColor(col);
     }
     inline void dialog(const std::string& text, const std::string& col = "white") { msg(text, col); }
+    inline void time_rewind(double frames = 60.0) {}
+    inline void time_scale(double s = 1.0) {}
+    inline void spawn_echo(const Value& entVal, double frames = 60.0) {}
+    inline void freeze_type(const std::string& type, double duration = 60.0) {}
+    inline void god_mode(bool enabled = true) {}
+    inline void tweak_var(const std::string& name, double minVal, double maxVal, double step = 1.0) {}
 
     inline void present() {
         int viewStartX = static_cast<int>(camX) - screenWidth / 2;
@@ -1113,7 +1302,9 @@ void Transpiler::transpileExpression(const Expr& expr, std::ostringstream& ss) {
             call->callee == "destroy" || call->callee == "count" || call->callee == "tile" ||
             call->callee == "tile_solid" || call->callee == "tile_at" || call->callee == "map_box" ||
             call->callee == "map_row" || call->callee == "camera" || call->callee == "msg" ||
-            call->callee == "dialog" || call->callee == "set_bloom" || call->callee == "set_scanlines") {
+            call->callee == "dialog" || call->callee == "set_bloom" || call->callee == "set_scanlines" ||
+            call->callee == "time_rewind" || call->callee == "time_scale" || call->callee == "spawn_echo" ||
+            call->callee == "freeze_type" || call->callee == "god_mode" || call->callee == "tweak_var") {
             ss << call->callee << "(";
         } else {
             ss << "fn_" << call->callee << "(";

@@ -62,6 +62,7 @@ enum class TokenType {
     Semicolon,
     Colon,
     Dot,
+    At,
 
     // End of file / Error
     EndOfFile,
@@ -135,6 +136,7 @@ inline const char* Token::tokenTypeName(TokenType t) {
         case TokenType::Semicolon: return ";";
         case TokenType::Colon: return ":";
         case TokenType::Dot: return ".";
+        case TokenType::At: return "@";
         case TokenType::EndOfFile: return "EOF";
         case TokenType::Error: return "Error";
         default: return "Unknown";

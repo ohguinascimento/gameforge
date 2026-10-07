@@ -122,9 +122,19 @@ struct ExprStmt : public Stmt {
     void dump(std::ostream& os, int indent = 0) const override;
 };
 
+struct TweakAnnotation {
+    bool hasTweak = false;
+    double minVal = 0.0;
+    double maxVal = 100.0;
+    double step = 1.0;
+    std::string keyUp;
+    std::string keyDown;
+};
+
 struct VarDeclStmt : public Stmt {
     std::string name;
     std::unique_ptr<Expr> initializer;
+    TweakAnnotation tweak;
 
     VarDeclStmt(std::string name, std::unique_ptr<Expr> init)
         : name(std::move(name)), initializer(std::move(init)) {}

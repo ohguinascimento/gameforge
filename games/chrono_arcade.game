@@ -1,0 +1,181 @@
+// ==============================================================================
+// Chrono Arcade: Time Shifter - GameForge Engine Showcase
+// Demonstração Integrada de:
+// 1. Dilatação Temporal Superhot (tempo desacelera para 0.08x quando parado)
+// 2. Retrocesso Temporal Contínuo (Rewind de 90 frames com a tecla 'R')
+// 3. Ecos do Passado (Clones espectrais com a função spawn_echo)
+// 4. Estase de Inimigos (freeze_type)
+// 5. Inspetor e Ajuste de Balanço em Tempo de Execução (Tecla TAB e teclas '[' e ']')
+// 6. God Mode para Testes de Fases (Tecla 'G')
+// ==============================================================================
+
+game "Chrono Arcade: Time Shifter" {
+    width: 64,
+    height: 26,
+    fps: 60
+}
+
+// ==============================================================================
+// Variáveis Globais com Anotações de Live-Tuning (@tweak)
+// ==============================================================================
+@tweak(0, 100, 5, "[", "]") var hp = 100;
+@tweak(0.5, 3.0, 0.25, "[", "]") var playerSpeed = 1.0;
+var score = 0;
+var rewindCharges = 3;
+var spawnTimer = 0;
+var p = 0;
+var moving = 0;
+
+// ==============================================================================
+// Declarações de Entidades
+// ==============================================================================
+entity Player {
+    var x = 32;
+    var y = 18;
+    var vx = 0;
+    var vy = 0;
+    var width = 16;
+    var height = 16;
+    var symbol = "@";
+    var color = "cyan";
+    var glow = 2.0;
+    var hp = 100;
+}
+
+entity Drone {
+    var x = 10;
+    var y = 5;
+    var vx = 0.15;
+    var vy = 0;
+    var width = 14;
+    var height = 14;
+    var symbol = "M";
+    var color = "red";
+    var glow = 1.2;
+    var shootCooldown = 30;
+}
+
+entity Bullet {
+    var x = 0;
+    var y = 0;
+    var vx = 0;
+    var vy = 0.22;
+    var width = 6;
+    var height = 10;
+    var symbol = "*";
+    var color = "yellow";
+    var glow = 2.5;
+}
+
+// ==============================================================================
+// Ciclo de Vida: Init
+// ==============================================================================
+init {
+    p = spawn Player;
+    p.x = 32;
+    p.y = 18;
+    p.hp = 100;
+    hp = 100;
+
+    set_bloom(1.6);
+    set_scanlines(0.25);
+
+    // Spawna drones patrulheiros iniciais
+    var d1 = spawn Drone;
+    d1.x = 12;
+    d1.y = 5;
+    d1.vx = 0.18;
+
+    var d2 = spawn Drone;
+    d2.x = 48;
+    d2.y = 7;
+    d2.vx = -0.16;
+
+    var d3 = spawn Drone;
+    d3.x = 28;
+    d3.y = 9;
+    d3.vx = 0.14;
+
+    msg("CHRONO ARCADE: [WASD] Mover | [R] Rewind 2s | [F] Estase | [TAB] Inspetor", "cyan");
+}
+
+// ==============================================================================
+// Ciclo de Vida: Update
+// ==============================================================================
+update {
+    moving = 0;
+
+    // 1. Movimentação do Jogador
+    if (key("left") || key("a") || key("A")) {
+        p.x = p.x - playerSpeed * 0.35;
+        moving = 1;
+    }
+    if (key("right") || key("d") || key("D")) {
+        p.x = p.x + playerSpeed * 0.35;
+        moving = 1;
+    }
+    if (key("up") || key("w") || key("W")) {
+        p.y = p.y - playerSpeed * 0.35;
+        moving = 1;
+    }
+    if (key("down") || key("s") || key("S")) {
+        p.y = p.y + playerSpeed * 0.35;
+        moving = 1;
+    }
+
+    // Limites de tela do jogador
+    if (p.x < 2) { p.x = 2; }
+    if (p.x > 61) { p.x = 61; }
+    if (p.y < 2) { p.y = 2; }
+    if (p.y > 23) { p.y = 23; }
+
+    // 2. Mecânica Superhot: Dilatação Temporal
+    // Quando o jogador se move, o tempo flui a 1.0x.
+    // Quando ele para, o tempo desacelera para 0.08x (quase congelado).
+    if (moving == 1) {
+        time_scale(1.0);
+    } else {
+        time_scale(0.08);
+    }
+
+    // 3. Mecânica Temporal: Rewind (Tecla 'R')
+    // Retrocede o universo em 90 frames (~1.5s) e gera um Eco Temporal do jogador
+    if (key("r") || key("R")) {
+        spawn_echo(p, 90);
+        time_rewind(90);
+        msg(">>> REWIND TEMPORAL: RETROCEDIDO NO TEMPO! ECO GERADO! <<<", "cyan");
+    }
+
+    // 4. Mecânica Temporal: Estase de Inimigos (Tecla 'F')
+    // Congela todas as entidades do tipo Drone por 120 frames (2 segundos)
+    if (key("f") || key("F")) {
+        freeze_type("Drone", 120);
+        msg("*** ESTASE TEMPORAL EM DRONES ATIVADA (2 SEGUNDOS)! ***", "magenta");
+    }
+
+    // 5. Patrulha e Disparos dos Drones
+    spawnTimer = spawnTimer + 1;
+    if (spawnTimer > 180) {
+        spawnTimer = 0;
+        var newDrone = spawn Drone;
+        newDrone.x = 10;
+        newDrone.y = 4;
+        newDrone.vx = 0.20;
+    }
+}
+
+// ==============================================================================
+// Tratador Declarativo de Colisões
+// ==============================================================================
+on collision(Player, Bullet) as (playerEnt, bulletEnt) {
+    destroy(bulletEnt);
+    playerEnt.hp = playerEnt.hp - 20;
+    hp = playerEnt.hp;
+    beep(200, 50);
+
+    if (hp <= 0) {
+        msg("DANO CRITICO! Pressione [R] para voltar no tempo e escapar!", "red");
+    } else {
+        msg("ATINGIDO! HP restante: " + hp + " | Dica: Pressione [R] para Rewind!", "yellow");
+    }
+}

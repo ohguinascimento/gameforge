@@ -130,7 +130,14 @@ enum class OpCode : uint8_t {
     OP_MAP_BOX,
     OP_MAP_ROW,
     OP_CAMERA_SET,
-    OP_SET_MESSAGE
+    OP_SET_MESSAGE,
+
+    // Temporal Spectrum & Live-Tuning Operations
+    OP_TIME_REWIND,
+    OP_SET_TIMESCALE,
+    OP_SPAWN_ECHO,
+    OP_FREEZE_TYPE,
+    OP_SET_GODMODE
 };
 
 struct Chunk {

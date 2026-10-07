@@ -92,6 +92,34 @@ std::unique_ptr<Program> Parser::parseProgram() {
             } else if (match(TokenType::Entity)) {
                 auto ent = parseEntityDecl();
                 if (ent) prog->entities.push_back(std::move(ent));
+            } else if (match(TokenType::At)) {
+                Token annot = consume(TokenType::Identifier, "Expected annotation name after '@'");
+                TweakAnnotation tweak;
+                tweak.hasTweak = true;
+                if (annot.text == "tweak") {
+                    consume(TokenType::LeftParen, "Expected '(' after @tweak");
+                    bool negMin = match(TokenType::Minus);
+                    tweak.minVal = (negMin ? -1.0 : 1.0) * consume(TokenType::Number, "Expected min value").numberValue;
+                    consume(TokenType::Comma, "Expected ',' after min value");
+                    bool negMax = match(TokenType::Minus);
+                    tweak.maxVal = (negMax ? -1.0 : 1.0) * consume(TokenType::Number, "Expected max value").numberValue;
+                    if (match(TokenType::Comma)) {
+                        tweak.step = consume(TokenType::Number, "Expected step value").numberValue;
+                        if (match(TokenType::Comma)) {
+                            tweak.keyUp = consume(TokenType::String, "Expected key_up").text;
+                            if (match(TokenType::Comma)) {
+                                tweak.keyDown = consume(TokenType::String, "Expected key_down").text;
+                            }
+                        }
+                    }
+                    consume(TokenType::RightParen, "Expected ')' after @tweak arguments");
+                }
+                consume(TokenType::Var, "Expected 'var' after annotation");
+                auto g = parseVarDecl();
+                if (g) {
+                    g->tweak = tweak;
+                    prog->globals.push_back(std::move(g));
+                }
             } else if (match(TokenType::Var)) {
                 auto g = parseVarDecl();
                 if (g) prog->globals.push_back(std::move(g));
@@ -211,6 +239,33 @@ std::unique_ptr<CollisionHandlerDecl> Parser::parseCollisionHandler() {
 }
 
 std::unique_ptr<Stmt> Parser::parseStatement() {
+    if (match(TokenType::At)) {
+        Token annot = consume(TokenType::Identifier, "Expected annotation name after '@'");
+        TweakAnnotation tweak;
+        tweak.hasTweak = true;
+        if (annot.text == "tweak") {
+            consume(TokenType::LeftParen, "Expected '(' after @tweak");
+            bool negMin = match(TokenType::Minus);
+            tweak.minVal = (negMin ? -1.0 : 1.0) * consume(TokenType::Number, "Expected min value").numberValue;
+            consume(TokenType::Comma, "Expected ',' after min value");
+            bool negMax = match(TokenType::Minus);
+            tweak.maxVal = (negMax ? -1.0 : 1.0) * consume(TokenType::Number, "Expected max value").numberValue;
+            if (match(TokenType::Comma)) {
+                tweak.step = consume(TokenType::Number, "Expected step value").numberValue;
+                if (match(TokenType::Comma)) {
+                    tweak.keyUp = consume(TokenType::String, "Expected key_up").text;
+                    if (match(TokenType::Comma)) {
+                        tweak.keyDown = consume(TokenType::String, "Expected key_down").text;
+                    }
+                }
+            }
+            consume(TokenType::RightParen, "Expected ')' after @tweak arguments");
+        }
+        consume(TokenType::Var, "Expected 'var' after annotation");
+        auto s = parseVarDecl();
+        if (s) s->tweak = tweak;
+        return s;
+    }
     if (match(TokenType::Var)) return parseVarDecl();
     if (match(TokenType::If)) return parseIfStmt();
     if (match(TokenType::While)) return parseWhileStmt();

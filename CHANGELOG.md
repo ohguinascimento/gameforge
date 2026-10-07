@@ -10,6 +10,33 @@ e este projeto adere ao [Semantic Versioning (SemVer 2.0.0)](https://semver.org/
 ## [0.0.1] - 2026-10-07
 
 ### Adicionado
+- **Sistema de Espectro Temporal (Time Engine - `include/TimeEngine.h`):**
+  - **Snapshot Ring Buffer O(1) (`TemporalBuffer<Capacity = 300>`):** Buffer circular contíguo pré-alocado no heap com footprint mínimo de stack, gravando até 300 frames (~5 segundos a 60 FPS) de histórico completo sem alocações dinâmicas contínuas a cada tick (zero impacto de GC e latência de CPU).
+  - **Snapshots Leves de Entidades (`EntitySnapshot` e `WorldSnapshot`):** Armazenamento de posição `(x, y)`, velocidade `(vx, vy)`, vida `(hp)`, estado ativo e variáveis globais relevantes (`score`, `mana`, `lives`).
+  - **Primitivas Temporais de Jogo:**
+    - `time_rewind(frames)` / `RewindWorld`: Retrocesso contínuo de todo o universo em marcha ré com restauração exata de estados.
+    - `rewindEntity(entityId, frames)`: Teletransporte temporal pontual de uma entidade específica para sua posição de N frames atrás (estilo "Recall").
+    - `time_scale(valor)` / `TimeScale`: Controle contínuo de dilatação temporal (1.0 = normal, 0.08 = estase estilo Superhot, -1.0 = reversão contínua).
+    - `spawn_echo(entidade, frames)` / `TemporalEcho`: Clone espectral que reproduz com fidelidade a sequência de ações e posições executadas nos últimos N frames.
+    - `freeze_type(tipo, duracao)`: Estase de tipo de entidade com congelamento de física por N frames.
+  - **Efeitos Audiovisuais Temporais:**
+    - Rastreamento espectral (*Ghost Trails / After-Images*) com *alpha blending* translúcido acelerado pela GPU.
+    - Modulação dinâmica de *pitch* de áudio (`getPitchShiftedFrequency`): desaceleração de tom no *slow-motion* e inversão tonal no *rewind*.
+
+- **Modo de Teste e Ajuste em Tempo de Execução (Live-Tuning Inspector & God Mode - `include/DebugInspector.h`):**
+  - **Inspetor ao Vivo Transparente (`DebugInspector`):** Alternado instantaneamente com a tecla mestre `TAB` (ou F1), desenhando um HUD sobreposto à cena sem pausar a lógica em execução.
+  - **Ajuste Dinâmico de Atributos:** Registro de variáveis numéricas (`TweakableVar`) e atalhos de incremento/decremento ao vivo com as teclas `[` e `]`.
+  - **Visualização de Barra de Vida Colorida:** Indicador de 3 estágios (Verde > 50%, Amarelo > 25%, Vermelho <= 25%).
+  - **God Mode Integrado:** Alternância de imortalidade para testes de fases com a tecla `G`.
+
+- **Extensão da Linguagem (.game), AST e Compilador:**
+  - Sintaxe de anotações de teste: `@tweak(min, max, step, key_up, key_down) var nome = valor;`.
+  - Opcodes nativos na VM: `OP_TIME_REWIND`, `OP_SET_TIMESCALE`, `OP_SPAWN_ECHO`, `OP_FREEZE_TYPE` e `OP_SET_GODMODE`.
+  - Transpilação nativa com suporte completo tanto no backend OpenGL quanto no backend Console.
+
+- **Jogo de Demonstração Showcase ("Chrono Arcade"):**
+  - `games/chrono_arcade.game`: Combina mecânica Superhot (tempo dilata para 0.08x quando parado), habilidade de retrocesso temporal de 2 segundos com `R`, estase de drones com `F`, e ajuste de balanceamento ao vivo com `TAB` e `[ / ]`.
+  - Executável nativo gerado: `bin/chrono_arcade.exe`.
 - **Motor Gráfico 2D em GPU com OpenGL 3.3 Core Profile e Raylib (`include/GpuEngineGL.h`):**
   - Render Target Virtual fixo (Canvas FBO) com escalonamento Pixel-Perfect e Letterboxing/Pillarboxing automático para 1080p, 1440p e 4K.
   - Sprite Batching / Instanciamento: Envio de todas as geometrias e sprites para a GPU em 1 única Draw Call (`glDrawArraysInstanced`).

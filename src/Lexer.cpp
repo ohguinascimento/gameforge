@@ -204,6 +204,7 @@ Token Lexer::scanToken() {
         case ';': return makeToken(TokenType::Semicolon);
         case ':': return makeToken(TokenType::Colon);
         case '.': return makeToken(TokenType::Dot);
+        case '@': return makeToken(TokenType::At);
 
         case '+':
             return match('=') ? makeToken(TokenType::PlusEqual) : makeToken(TokenType::Plus);

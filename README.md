@@ -20,8 +20,9 @@ O projeto oferece um **Dual-Target Execution Pipeline**: você pode tanto rodar 
 7. [Padrões de Versionamento e Patches](#-padrões-de-versionamento-e-patches)
 8. [Gerenciamento Inteligente de Memória e Multi-Thread](#-gerenciamento-inteligente-de-memória-e-arquitetura-multi-thread)
 9. [Aceleração GPU 2D e Módulo Rust](#-aceleração-gpu-2d-e-módulo-rust)
-10. [Jogos de Exemplo Incluídos](#-jogos-de-exemplo-incluídos)
-11. [Como Compilar o GameForge](#-como-compilar-o-gameforge)
+10. [Sistema de Espectro Temporal e Live-Tuning Inspector](#-sistema-de-espectro-temporal-e-live-tuning-inspector)
+11. [Jogos de Exemplo Incluídos](#-jogos-de-exemplo-incluídos)
+12. [Como Compilar o GameForge](#-como-compilar-o-gameforge)
 
 ---
 
@@ -413,9 +414,48 @@ O script [build_gpu.ps1](file:///d:/Projetos/Compilador%20game/build_gpu.ps1) au
 
 ---
 
+## ⏳ Sistema de Espectro Temporal e Live-Tuning Inspector
+
+O GameForge inclui dois sistemas integrados de manipulação de física no tempo e depuração interativa ao vivo:
+
+### 1. Sistema de Espectro Temporal (Time Engine)
+* **Snapshot Ring Buffer O(1) (`TemporalBuffer<300>` em [include/TimeEngine.h](file:///d:/Projetos/Compilador%20game/include/TimeEngine.h))**:
+  - Buffer circular de 300 frames contíguos (~5 segundos de jogo a 60 FPS) que grava a cada tick as posições `(x, y)`, velocidades `(vx, vy)`, vida `(hp)` e estado das entidades com **zero alocação dinâmica contínua** e zero impacto no GC.
+* **Primitivas Temporais em Scripts**:
+  - `time_scale(fator)`: Altera a velocidade do tempo globalmente (ex: `1.0` = normal, `0.08` = estase estilo Superhot quando o jogador para).
+  - `time_rewind(frames)`: Retrocede todo o universo em marcha ré e restaura estados passados de entidades e variáveis globais.
+  - `spawn_echo(entidade, frames)`: Cria um clone espectral/fantasma que reproduz com precisão a sequência de passos executados pela entidade.
+  - `freeze_type(tipo, duracao)`: Congela a movimentação e física de todas as entidades daquele tipo por N frames.
+* **Efeitos Audiovisuais Temporais**:
+  - Rastro espectral translúcido (*Ghost Trails / After-Images*) desenhado na GPU com *alpha blending*.
+  - Modulação dinâmica de *pitch* de áudio (`getPitchShiftedFrequency`): desacelera a frequência em *slow-mo* e inverte no *rewind*.
+
+### 2. Live-Tuning Inspector & God Mode
+* **HUD Translúcido em Tempo Real ([include/DebugInspector.h](file:///d:/Projetos/Compilador%20game/include/DebugInspector.h))**:
+  - Ativado ou desativado instantaneamente com a tecla **TAB** ou **F1** sem pausar o jogo.
+* **Ajuste Dinâmico de Atributos**:
+  - Suporte a anotações sintáticas na linguagem: `@tweak(min, max, step, "[", "]") var hp = 100;`.
+  - Use as teclas **`[`** e **`]`** para incrementar ou decrementar variáveis numéricas selecionadas em tempo real.
+* **Barra de Vida com Indicador de Cores**:
+  - **Verde**: > 50%
+  - **Amarelo**: > 25%
+  - **Vermelho**: <= 25%
+* **God Mode**:
+  - Pressione a tecla **G** para alternar imortalidade instantânea para testes de colisão e level design.
+
+---
+
 ## 🎮 Jogos de Exemplo Incluídos
 
 Na pasta `games/` você encontra implementações completas:
+
+0. **[chrono_arcade.game](file:///d:/Projetos/Compilador%20game/games/chrono_arcade.game)** (*NOVO!*):
+   * Demonstração completa do **Espectro Temporal** e do **Live-Tuning Inspector**.
+   * Mecânica **Superhot**: Projéteis e inimigos desaceleram para 0.08x quando o jogador está parado.
+   * Mecânica **Time-Travel**: Pressione **`R`** para retroceder 1.5s no tempo e escapar de tiros fatais, gerando um Eco Espectral.
+   * Mecânica **Estase**: Pressione **`F`** para congelar todos os drones por 2 segundos.
+   * Pressione **`TAB`** para abrir o Live Inspector, **`G`** para God Mode e **`[` / `]`** para ajustar o HP e velocidade.
+   * Binário nativo gerado: `bin/chrono_arcade.exe`.
 
 1. **[pong.game](file:///d:/Projetos/Compilador%20game/games/pong.game)**:
    * Jogo Pong arcade com raquete do jogador e raquete da IA.

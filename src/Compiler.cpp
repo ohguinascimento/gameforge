@@ -574,6 +574,45 @@ void Compiler::compileCall(const CallExpr& expr, Chunk& chunk, ScopeContext& sco
         emitOp(chunk, OpCode::OP_NULL);
         return;
     }
+    if (expr.callee == "time_rewind") {
+        if (!expr.arguments.empty()) compileExpression(*expr.arguments[0], chunk, scope);
+        else emitConstant(chunk, Value(60.0));
+        emitOp(chunk, OpCode::OP_TIME_REWIND);
+        emitOp(chunk, OpCode::OP_NULL);
+        return;
+    }
+    if (expr.callee == "time_scale") {
+        if (!expr.arguments.empty()) compileExpression(*expr.arguments[0], chunk, scope);
+        else emitConstant(chunk, Value(1.0));
+        emitOp(chunk, OpCode::OP_SET_TIMESCALE);
+        emitOp(chunk, OpCode::OP_NULL);
+        return;
+    }
+    if (expr.callee == "spawn_echo") {
+        if (!expr.arguments.empty()) compileExpression(*expr.arguments[0], chunk, scope);
+        else emitConstant(chunk, Value(0.0));
+        if (expr.arguments.size() > 1) compileExpression(*expr.arguments[1], chunk, scope);
+        else emitConstant(chunk, Value(60.0));
+        emitOp(chunk, OpCode::OP_SPAWN_ECHO);
+        emitOp(chunk, OpCode::OP_NULL);
+        return;
+    }
+    if (expr.callee == "freeze_type") {
+        if (!expr.arguments.empty()) compileExpression(*expr.arguments[0], chunk, scope);
+        else emitConstant(chunk, Value("Enemy"));
+        if (expr.arguments.size() > 1) compileExpression(*expr.arguments[1], chunk, scope);
+        else emitConstant(chunk, Value(60.0));
+        emitOp(chunk, OpCode::OP_FREEZE_TYPE);
+        emitOp(chunk, OpCode::OP_NULL);
+        return;
+    }
+    if (expr.callee == "god_mode") {
+        if (!expr.arguments.empty()) compileExpression(*expr.arguments[0], chunk, scope);
+        else emitConstant(chunk, Value(true));
+        emitOp(chunk, OpCode::OP_SET_GODMODE);
+        emitOp(chunk, OpCode::OP_NULL);
+        return;
+    }
 
     // User-defined function call
     // Push callee name

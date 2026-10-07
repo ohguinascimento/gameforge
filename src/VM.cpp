@@ -461,6 +461,63 @@ InterpretResult VM::executeChunk(const Chunk& chunk, size_t baseOffset) {
                 engine.setMessage(msgVal.isString() ? msgVal.asString() : msgVal.toString(), c);
                 break;
             }
+            case OpCode::OP_TIME_REWIND: {
+                Value framesVal = pop();
+                size_t frames = static_cast<size_t>(std::max(1.0, framesVal.asNumber()));
+                GameForge::Time::WorldSnapshot snap;
+                if (temporalBuffer.rewindWorld(frames, snap)) {
+                    for (uint32_t i = 0; i < snap.entityCount; ++i) {
+                        const auto& es = snap.entities[i];
+                        Entity* ent = engine.getEntity(es.id);
+                        if (ent) {
+                            ent->active = es.active;
+                            ent->fields["x"] = Value(static_cast<double>(es.x));
+                            ent->fields["y"] = Value(static_cast<double>(es.y));
+                            ent->fields["vx"] = Value(static_cast<double>(es.vx));
+                            ent->fields["vy"] = Value(static_cast<double>(es.vy));
+                            ent->fields["hp"] = Value(static_cast<double>(es.hp));
+                        }
+                    }
+                    if (globals.count("score")) globals["score"] = Value(snap.score);
+                    if (globals.count("mana")) globals["mana"] = Value(snap.mana);
+                    if (globals.count("lives")) globals["lives"] = Value(snap.lives);
+                    if (globals.count("hp")) globals["hp"] = Value(snap.mana);
+                    engine.playBeep(temporalBuffer.getPitchShiftedFrequency(880), 40);
+                }
+                break;
+            }
+            case OpCode::OP_SET_TIMESCALE: {
+                Value scaleVal = pop();
+                temporalBuffer.setTimeScale(static_cast<float>(scaleVal.asNumber()));
+                break;
+            }
+            case OpCode::OP_SPAWN_ECHO: {
+                Value framesVal = pop();
+                Value entVal = pop();
+                uint32_t entId = entVal.isEntity() ? entVal.asEntity() : static_cast<uint32_t>(entVal.asNumber());
+                size_t frames = static_cast<size_t>(std::max(1.0, framesVal.asNumber()));
+                auto history = temporalBuffer.getEntityHistory(entId, frames);
+                if (!history.empty()) {
+                    GameForge::Time::TemporalEcho echo;
+                    echo.targetEntityId = entId;
+                    echo.trajectory = std::vector<GameForge::Time::EntitySnapshot>(history.rbegin(), history.rend());
+                    echo.playbackIndex = 0;
+                    echo.active = true;
+                    temporalEchoes.push_back(std::move(echo));
+                }
+                break;
+            }
+            case OpCode::OP_FREEZE_TYPE: {
+                Value durVal = pop();
+                Value typeVal = pop();
+                frozenTypes[typeVal.isString() ? typeVal.asString() : typeVal.toString()] = static_cast<int>(durVal.asNumber());
+                break;
+            }
+            case OpCode::OP_SET_GODMODE: {
+                Value godVal = pop();
+                inspector.setGodMode(godVal.asBool());
+                break;
+            }
 
             default:
                 runtimeError("Unknown opcode");
@@ -475,6 +532,10 @@ InterpretResult VM::executeChunk(const Chunk& chunk, size_t baseOffset) {
 }
 
 void VM::runInit() {
+    temporalBuffer.reset();
+    temporalEchoes.clear();
+    frozenTypes.clear();
+
     try {
         executeChunk(game.globalInitChunk);
         executeChunk(game.initChunk);
@@ -483,27 +544,112 @@ void VM::runInit() {
     } catch (...) {
         runtimeError("Unknown exception during game init");
     }
+
+    // Registra variáveis no DebugInspector para Live-Tuning ao vivo
+    for (auto& kv : globals) {
+        if (kv.second.isNumber()) {
+            if (kv.first == "hp" || kv.first == "player_hp") {
+                inspector.registerPlayerHp(&kv.second.numberVal, 100.0);
+            } else {
+                inspector.registerVar(kv.first, &kv.second.numberVal, 0.0, 1000.0, 1.0);
+            }
+        }
+    }
 }
 
 void VM::runUpdate() {
     engine.pollInput();
 
+    // Live-Tuning Inspector & God Mode atalhos de teclado
+    bool tabPressed = engine.isKeyPressed("TAB");
+    bool gPressed = engine.isKeyPressed("G");
+    bool leftBracket = engine.isKeyPressed("[");
+    bool rightBracket = engine.isKeyPressed("]");
+    inspector.handleInput(tabPressed, gPressed, leftBracket, rightBracket);
+
+    // Se God Mode estiver ativo, mantém HP do jogador protegido
+    if (inspector.isGodMode()) {
+        auto hpIt = globals.find("hp");
+        if (hpIt != globals.end()) hpIt->second.numberVal = 100.0;
+        auto phpIt = globals.find("player_hp");
+        if (phpIt != globals.end()) phpIt->second.numberVal = 100.0;
+    }
+
+    // Atualiza contadores de tipos congelados
+    for (auto it = frozenTypes.begin(); it != frozenTypes.end();) {
+        if (it->second > 0) {
+            it->second--;
+            ++it;
+        } else {
+            it = frozenTypes.erase(it);
+        }
+    }
+
+    // Fator de escala temporal global
+    float dtScale = temporalBuffer.getTimeScale();
+
     // Auto-update entities velocity (vx, vy)
     for (const auto& kv : engine.getAllEntities()) {
         Entity* e = engine.getEntity(kv.first);
         if (!e || !e->active) continue;
+
+        // Se o tipo estiver congelado, pula física
+        if (frozenTypes.find(e->type) != frozenTypes.end()) continue;
+
         auto vxIt = e->fields.find("vx");
         auto vyIt = e->fields.find("vy");
         if (vxIt != e->fields.end() && vxIt->second.isNumber()) {
-            e->fields["x"] = Value(e->getX() + vxIt->second.asNumber());
+            e->fields["x"] = Value(e->getX() + vxIt->second.asNumber() * dtScale);
         }
         if (vyIt != e->fields.end() && vyIt->second.isNumber()) {
-            e->fields["y"] = Value(e->getY() + vyIt->second.asNumber());
+            e->fields["y"] = Value(e->getY() + vyIt->second.asNumber() * dtScale);
         }
         if (e->type == "Bullet" && (e->getY() < 1 || e->getY() >= engine.getHeight() - 1)) {
             e->active = false;
         }
     }
+
+    // Atualiza Ecos Temporais ativos
+    for (auto it = temporalEchoes.begin(); it != temporalEchoes.end();) {
+        GameForge::Time::EntitySnapshot echoFrame;
+        if (it->updateNextFrame(echoFrame)) {
+            ++it;
+        } else {
+            it = temporalEchoes.erase(it);
+        }
+    }
+
+    // Gravação O(1) de snapshot no ring buffer temporal
+    GameForge::Time::WorldSnapshot snap;
+    snap.timeScale = dtScale;
+    auto scIt = globals.find("score");
+    if (scIt != globals.end()) snap.score = scIt->second.asNumber();
+    auto mnIt = globals.find("mana");
+    if (mnIt != globals.end()) snap.mana = mnIt->second.asNumber();
+    auto lvIt = globals.find("lives");
+    if (lvIt != globals.end()) snap.lives = lvIt->second.asNumber();
+
+    uint32_t entIdx = 0;
+    for (const auto& kv : engine.getAllEntities()) {
+        if (entIdx >= GameForge::Time::WorldSnapshot::MAX_SNAPSHOT_ENTITIES) break;
+        const Entity& e = kv.second;
+        if (!e.active) continue;
+
+        auto& es = snap.entities[entIdx++];
+        es.id = e.id;
+        es.x = static_cast<float>(e.getX());
+        es.y = static_cast<float>(e.getY());
+        auto vxIt = e.fields.find("vx");
+        es.vx = (vxIt != e.fields.end()) ? static_cast<float>(vxIt->second.asNumber()) : 0.0f;
+        auto vyIt = e.fields.find("vy");
+        es.vy = (vyIt != e.fields.end()) ? static_cast<float>(vyIt->second.asNumber()) : 0.0f;
+        auto hpIt = e.fields.find("hp");
+        es.hp = (hpIt != e.fields.end()) ? static_cast<float>(hpIt->second.asNumber()) : 100.0f;
+        es.active = e.active;
+        es.symbol = e.getSymbol();
+    }
+    snap.entityCount = entIdx;
+    temporalBuffer.captureFrame(snap);
 
     size_t stackBase = stack.size();
     try {
@@ -635,6 +781,61 @@ void VM::runRender() {
             std::string msgBar = "[ " + engine.getMessage() + " ]";
             int msgX = std::max(2, (engine.getWidth() - static_cast<int>(msgBar.length())) / 2);
             engine.drawText(msgX, engine.getHeight() - 2, msgBar, engine.getMessageColor());
+        }
+
+        // Renderiza Ecos Temporais (Fantasmas Espectrais do Passado)
+        for (const auto& echo : temporalEchoes) {
+            if (echo.playbackIndex > 0 && echo.playbackIndex <= echo.trajectory.size()) {
+                const auto& frame = echo.trajectory[echo.playbackIndex - 1];
+                int ex = static_cast<int>(std::round(frame.x)) - camX;
+                int ey = static_cast<int>(std::round(frame.y)) - camY;
+                if (ex > 0 && ex < engine.getWidth() - 1 && ey > 0 && ey < engine.getHeight() - 1) {
+                    engine.setPixel(ex, ey, '*', Color::Cyan);
+                }
+            }
+        }
+
+        // Live-Tuning Inspector HUD Overlay
+        if (inspector.isVisible()) {
+            int hudW = 34;
+            int hudH = 10;
+            int hx = 2;
+            int hy = 2;
+            engine.drawBox(hx, hy, hudW, hudH, Color::Cyan);
+            engine.drawText(hx + 2, hy, " LIVE INSPECTOR ", Color::Yellow);
+
+            // God Mode Indicator
+            std::string gmText = inspector.isGodMode() ? "[G] GOD MODE: ATIVO" : "[G] GOD MODE: OFF";
+            engine.drawText(hx + 2, hy + 2, gmText, inspector.isGodMode() ? Color::Green : Color::White);
+
+            // Time Scale Indicator
+            std::ostringstream tsSs;
+            tsSs << "Tempo: " << std::fixed << std::setprecision(2) << temporalBuffer.getTimeScale() << "x";
+            engine.drawText(hx + 2, hy + 3, tsSs.str(), Color::Cyan);
+
+            // Health Bar
+            double hpVal = inspector.getPlayerHp();
+            double hpRatio = inspector.getHpRatio();
+            int barLen = 12;
+            int filled = static_cast<int>(hpRatio * barLen);
+            std::string bar = "[";
+            for (int b = 0; b < barLen; ++b) bar += (b < filled) ? "=" : " ";
+            bar += "] " + std::to_string(static_cast<int>(hpVal));
+
+            float r, g, b;
+            inspector.getHpColor(r, g, b);
+            Color hpCol = (r > 0.5f && g > 0.5f) ? Color::Yellow : ((g > 0.5f) ? Color::Green : Color::Red);
+            engine.drawText(hx + 2, hy + 5, bar, hpCol);
+
+            // Tweakable Variables List & Adjustment Hint
+            const auto& vars = inspector.getVariables();
+            if (!vars.empty()) {
+                size_t sel = inspector.getSelectedIndex();
+                const auto& v = vars[sel];
+                std::string varStr = "> " + v.name + ": " + std::to_string(static_cast<int>(v.ptr ? *v.ptr : 0));
+                engine.drawText(hx + 2, hy + 7, varStr, Color::Yellow);
+                engine.drawText(hx + 2, hy + 8, "Use [ e ] para ajustar", Color::Cyan);
+            }
         }
 
         // Footer prompt with safe mode status if errors occurred
