@@ -1,5 +1,8 @@
 # 🕹️ GameForge — Compilador e Engine de Jogos Arcade em C++
 
+[![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://semver.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 **GameForge** é uma linguagem de domínio específico (**DSL**) e compilador completo desenvolvido em C++20 para criação, prototipagem rápida e distribuição de jogos retrô em terminal.
 
 O projeto oferece um **Dual-Target Execution Pipeline**: você pode tanto rodar o jogo instantaneamente através de uma **Máquina Virtual de Bytecode** com pilha protegida, quanto compilar diretamente para um **executável nativo `.exe` independente** via transpilador C++ integrado.
@@ -10,11 +13,13 @@ O projeto oferece um **Dual-Target Execution Pipeline**: você pode tanto rodar 
 
 1. [Arquitetura Geral](#-arquitetura-geral)
 2. [Sintaxe da Linguagem (.game)](#-sintaxe-da-linguagem-game)
-3. [Funções Nativas e Recursos de Jogo](#-funções-nativas-e-recursos-de-jogo)
-4. [CLI e Comandos do Compilador (gamec)](#-cli-e-comandos-do-compilador-gamec)
-5. [Tolerância a Falhas e Isolamento de Erros (Anti-Crash)](#-tolerância-a-falhas-e-isolamento-de-erros-anti-crash)
-6. [Jogos de Exemplo Incluídos](#-jogos-de-exemplo-incluídos)
-7. [Como Compilar o GameForge](#-como-compilar-o-gameforge)
+3. [Criação de Mapas RPG e Masmorras](#-criação-de-mapas-rpg-e-masmorras)
+4. [Funções Nativas e Recursos de Jogo](#-funções-nativas-e-recursos-de-jogo)
+5. [CLI e Comandos do Compilador (gamec)](#-cli-e-comandos-do-compilador-gamec)
+6. [Tolerância a Falhas e Isolamento de Erros (Anti-Crash)](#-tolerância-a-falhas-e-isolamento-de-erros-anti-crash)
+7. [Padrões de Versionamento e Patches](#-padrões-de-versionamento-e-patches)
+8. [Jogos de Exemplo Incluídos](#-jogos-de-exemplo-incluídos)
+9. [Como Compilar o GameForge](#-como-compilar-o-gameforge)
 
 ---
 
@@ -266,6 +271,42 @@ O GameForge foi projetado para **nunca crashar o jogo** devido a pequenos erros 
    * `--safe-mode` ou `-f` *(Padrão)*: Tolerância ativa e isolamento total.
    * `--ignore-errors`: Permite rodar o código mesmo se o parser encontrar erros sintáticos pontuais recuperáveis.
    * `--strict`: Modo estrito para depuração profunda (interrompe na primeira falha léxica/sintática/runtime).
+
+---
+
+## 🏷️ Padrões de Versionamento e Patches
+
+O projeto adota rigorosamente as convenções de:
+* **[SemVer 2.0.0 (Semantic Versioning)](https://semver.org/lang/pt-BR/)**: Formato `MAJOR.MINOR.PATCH` (Versão atual: `0.0.1` / `v0.0.1`).
+  * `MAJOR`: Mudanças incompatíveis com versões anteriores.
+  * `MINOR`: Novas funcionalidades com total retrocompatibilidade.
+  * `PATCH`: Correções de bugs, resiliência e aprimoramentos pontuais (ex: `0.0.1` para adição do motor RPG e isolamento de falhas).
+* **[Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)**: Todas as adições, correções e alterações são registradas detalhadamente no arquivo [`CHANGELOG.md`](file:///d:/Projetos/Compilador%20game/CHANGELOG.md).
+
+### Consultando a Versão via CLI
+```powershell
+# Exibe a versão atual e nome da release
+.\bin\gamec.exe version
+# ou
+.\bin\gamec.exe -v
+```
+Saída:
+```text
+GameForge version 0.0.1 (v0.0.1) - RPG Map Engine & Resilience Alpha
+```
+
+### Arquivos de Patch (`patches/`)
+Modificações atômicas e releases são versionadas como patches portáteis compatíveis com Git no diretório `patches/`:
+* **[`patches/v0.0.1-rpg-maps.patch`](file:///d:/Projetos/Compilador%20game/patches/v0.0.1-rpg-maps.patch)**: Conjunto completo de alterações introduzindo o subsistema de mapas RPG, câmera e tolerância a falhas.
+
+#### Como aplicar um patch:
+```bash
+# Validar se o patch se aplica de forma limpa:
+git apply --check patches/v0.0.1-rpg-maps.patch
+
+# Aplicar o patch ao repositório:
+git apply patches/v0.0.1-rpg-maps.patch
+```
 
 ---
 

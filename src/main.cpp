@@ -5,6 +5,7 @@
 #include "VM.h"
 #include "Engine.h"
 #include "Transpiler.h"
+#include "Version.h"
 
 using namespace GameLang;
 
@@ -21,7 +22,7 @@ static std::string readFile(const std::string& path) {
 
 static void printHelp() {
     std::cout << "\033[1;36m====================================================\033[0m\n";
-    std::cout << "\033[1;32m      GameForge - Compilador de Games em C++        \033[0m\n";
+    std::cout << "\033[1;32m      GameForge " << GameForge::VERSION_TAG << " - Compilador de Games em C++  \033[0m\n";
     std::cout << "\033[1;36m====================================================\033[0m\n\n";
     std::cout << "Uso: gamec <comando> <arquivo.game> [opcoes]\n\n";
     std::cout << "Comandos:\n";
@@ -30,6 +31,7 @@ static void printHelp() {
     std::cout << "  \033[1;33mbuild <arquivo>\033[0m        Transpila e compila para executavel nativo .exe (-o <jogo.exe>)\n";
     std::cout << "  \033[1;33mdump-ast <arquivo>\033[0m     Exibe a Abstract Syntax Tree (AST)\n";
     std::cout << "  \033[1;33mdump-bc <arquivo>\033[0m      Exibe o Bytecode descompilado (Disassembly)\n";
+    std::cout << "  \033[1;33mversion / -v\033[0m           Exibe a versao do GameForge\n";
     std::cout << "  \033[1;33mhelp\033[0m                   Exibe esta ajuda\n\n";
     std::cout << "Opcoes de Resiliencia / Tolerancia a Falhas:\n";
     std::cout << "  \033[1;32m--safe-mode / -f\033[0m       (Padrao) Isola erros de runtime e parsing para evitar crash\n";
@@ -37,8 +39,8 @@ static void printHelp() {
     std::cout << "  \033[1;32m--strict\033[0m               Modo estrito: interrompe na primeira falha\n\n";
     std::cout << "Exemplos:\n";
     std::cout << "  gamec run games/space_invaders.game\n";
-    std::cout << "  gamec run games/pong.game --safe-mode\n";
-    std::cout << "  gamec build games/snake.game -o snake.exe\n";
+    std::cout << "  gamec run games/rpg_dungeon.game\n";
+    std::cout << "  gamec build games/rpg_dungeon.game -o bin/rpg.exe\n";
     std::cout << "  gamec transpile games/pong.game -o pong.cpp\n\n";
 }
 
@@ -49,6 +51,11 @@ int main(int argc, char* argv[]) {
     }
 
     std::string cmd = argv[1];
+    if (cmd == "version" || cmd == "--version" || cmd == "-v") {
+        std::cout << GameForge::getVersionInfo() << std::endl;
+        return 0;
+    }
+
     if (cmd == "help" || cmd == "--help" || cmd == "-h") {
         printHelp();
         return 0;

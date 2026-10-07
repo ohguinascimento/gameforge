@@ -1,0 +1,970 @@
+From fafb226a718db3cfd304713036a489db095e3f6d Mon Sep 17 00:00:00 2001
+From: Guilherme <guines002@hotmail.com>
+Date: Wed, 7 Oct 2026 03:27:40 -0300
+Subject: [PATCH] feat: adicionar suporte completo a criacao de mapas RPG,
+ tilemaps, camera, colisoes solidas e dialogos
+
+---
+ README.md              |  58 ++++++++++
+ games/rpg_dungeon.game | 244 +++++++++++++++++++++++++++++++++++++++++
+ include/Bytecode.h     |  11 +-
+ include/Engine.h       |  32 ++++++
+ src/Bytecode.cpp       |   7 ++
+ src/Compiler.cpp       |  50 +++++++++
+ src/Engine.cpp         |  54 +++++++++
+ src/Transpiler.cpp     | 131 +++++++++++++++++++++-
+ src/VM.cpp             | 135 +++++++++++++++++++++--
+ 9 files changed, 711 insertions(+), 11 deletions(-)
+ create mode 100644 games/rpg_dungeon.game
+
+diff --git a/README.md b/README.md
+index ee67f93..e44a229 100644
+--- a/README.md
++++ b/README.md
+@@ -158,11 +158,61 @@ while (i < 10) {
+ | `beep(freq, durMs)` | Toca um som retrô no alto-falante interno | `beep(440, 50);` |
+ | `random(min, max)` | Gera um número inteiro pseudoaleatório | `var r = random(2, 50);` |
+ | `count("Tipo")` | Retorna o total de entidades ativas desse tipo | `if (count("Alien") == 0) { ... }` |
++| `tile(x, y, ch, col, solid)` | Define um ladrilho no mapa com colisão opcional | `tile(10, 5, ".", "white", 0);` |
++| `tile_solid(x, y)` | Retorna se o ladrilho na posição é uma parede sólida | `if (!tile_solid(x, y - 1)) { ... }` |
++| `tile_at(x, y)` | Retorna o caractere do ladrilho na posição dada | `if (tile_at(x, y) == "+") { ... }` |
++| `map_box(x, y, w, h, ch, col, s)` | Constrói salas ou contornos com paredes sólidas | `map_box(2, 2, 14, 8, "#", "blue", 1);` |
++| `map_row(x, y, str, col, solid)` | Imprime uma linha inteira de ladrilhos no mapa | `map_row(5, 10, "###...###", "blue", 1);` |
++| `camera(cx, cy)` | Move a câmera para seguir o herói pelo mundo | `camera(hero.x - 30, hero.y - 10);` |
++| `msg(texto, col)` | Exibe um banner de diálogo/notificação RPG na tela | `msg("Porta destrancada!", "green");` |
+ 
+ > **Teclas suportadas:** `"UP"`, `"DOWN"`, `"LEFT"`, `"RIGHT"`, `"SPACE"`, `"ENTER"`, `"ESC"`, `"W"`, `"A"`, `"S"`, `"D"` e letras `"A"` a `"Z"`.
+ 
+ ---
+ 
++## 🗺️ Criação de Mapas RPG e Masmorras
++
++O GameForge inclui suporte nativo a jogos de aventura, masmorras e RPGs com grid 2D:
++
++### 1. Construção de Salas e Portas
++Você pode construir cômodos inteiros com `map_box` e abrir passagens ou portas com `tile`:
++```game
++// Constrói sala de 14x8 com paredes sólidas
++map_box(2, 2, 14, 8, "#", "blue", 1);
++
++// Abre uma passagem não sólida (caminhável)
++tile(15, 5, ".", "white", 0);
++
++// Coloca uma porta trancada sólida
++tile(7, 12, "+", "yellow", 1);
++```
++
++### 2. Movimentação com Paredes Sólidas
++Utilize `!tile_solid(x, y)` para impedir que o herói atravesse paredes ou obstáculos:
++```game
++if (key_pressed("UP")) {
++    if (!tile_solid(hero.x, hero.y - 1)) {
++        hero.y = hero.y - 1;
++    } else {
++        msg("Caminho bloqueado por parede de pedra.", "white");
++    }
++}
++```
++
++### 3. Câmera Dinâmica que Segue o Herói
++Com mapas maiores que a tela do console, a câmera acompanha o jogador suavemente:
++```game
++update {
++    camera(hero.x - 30, hero.y - 10);
++}
++```
++
++### 4. Caixas de Diálogo e HUD RPG Automático
++- `msg("Texto...", "cor")`: Exibe um letreiro elegante de mensagem/diálogo no rodapé.
++- Variáveis globais como `var hp = 100;` e `var gold = 0;` são reconhecidas pelo motor gráfico e exibidas automaticamente no painel de status inferior em cores temáticas (Vermelho para HP, Amarelo para Ouro).
++
++---
++
+ ## 💻 CLI e Comandos do Compilador (`gamec`)
+ 
+ O compilador aceita comandos diretamente no terminal:
+@@ -236,6 +286,14 @@ Na pasta `games/` você encontra implementações completas:
+    * Esquadrão completo de alienígenas em formação matricial.
+    * Céu estrelado gerado proceduralmente no fundo.
+    * Detecção de vitória ao eliminar todos os alienígenas (`count("Alien") == 0`).
++4. **[rpg_dungeon.game](file:///d:/Projetos/Compilador%20game/games/rpg_dungeon.game)**:
++   * Masmorra RPG completa com múltiplas salas, corredores e paredes sólidas (`map_box`, `tile`).
++   * Portas trancadas que exigem coletar a chave de ferro `k` para abrir.
++   * Fonte sagrada que regenera pontos de vida (`hp`).
++   * Câmera dinâmica de rolagem centralizada no herói (`camera`).
++   * Monstros (Orc, Esqueleto) com pontos de vida individuais e combate.
++   * Baú com tesouro em moedas de ouro (`gold`) e poções de cura.
++   * Sistema de diálogo narrativo e notificações temáticas (`msg`).
+ 
+ ---
+ 
+diff --git a/games/rpg_dungeon.game b/games/rpg_dungeon.game
+new file mode 100644
+index 0000000..c250743
+--- /dev/null
++++ b/games/rpg_dungeon.game
+@@ -0,0 +1,244 @@
++// ==========================================
++// GameForge RPG: Catacumbas Esquecidas
++// Demonstracao de Mapas, Paredes Solidas,
++// Portas Trancadas, Camera, Baús e Dialogos
++// ==========================================
++
++game "Dungeon Crawler RPG" {
++    width: 60,
++    height: 22,
++    fps: 20
++}
++
++var hp = 100;
++var gold = 0;
++var keys = 0;
++var hero = 0;
++
++entity Hero {
++    var x = 5;
++    var y = 5;
++    var symbol = "@";
++    var color = "cyan";
++}
++
++entity Monster {
++    var x = 32;
++    var y = 5;
++    var hp = 30;
++    var symbol = "M";
++    var color = "red";
++}
++
++entity Skeleton {
++    var x = 20;
++    var y = 14;
++    var hp = 20;
++    var symbol = "S";
++    var color = "white";
++}
++
++entity Chest {
++    var x = 36;
++    var y = 8;
++    var value = 100;
++    var symbol = "$";
++    var color = "yellow";
++}
++
++entity Potion {
++    var x = 25;
++    var y = 14;
++    var heal = 40;
++    var symbol = "+";
++    var color = "magenta";
++}
++
++entity KeyItem {
++    var x = 12;
++    var y = 7;
++    var symbol = "k";
++    var color = "yellow";
++}
++
++init {
++    // ------------------------------------
++    // Construcao das Salas e Masmorras (Mapas RPG)
++    // ------------------------------------
++
++    // Sala Inicial (5x8 interior)
++    map_box(2, 2, 14, 8, "#", "blue", 1);
++    tile(15, 5, ".", "white", 0); // Saida direita
++
++    // Corredor Central conectando a Sala 2
++    map_box(15, 4, 12, 3, "#", "blue", 1);
++    tile(15, 5, ".", "white", 0);
++    tile(26, 5, ".", "white", 0);
++
++    // Sala do Tesouro (Sala 2 com Monstro e Bau)
++    map_box(26, 2, 14, 9, "#", "blue", 1);
++    tile(26, 5, ".", "white", 0);
++
++    // Corredor Sul com Porta Trancada
++    map_box(6, 9, 3, 4, "#", "blue", 1);
++    tile(7, 9, ".", "white", 0);  // Entrada do corredor
++    tile(7, 12, "+", "yellow", 1); // Porta trancada com chave
++
++    // Catacumba Inferior (Sala 3)
++    map_box(3, 12, 26, 7, "#", "blue", 1);
++    tile(7, 12, "+", "yellow", 1); // A mesma porta na parede norte
++
++    // Detalhes de Ambiente: Fonte de Agua Sagrada na sala inicial
++    tile(4, 4, "~", "cyan", 0);
++    tile(5, 4, "~", "cyan", 0);
++
++    // Spawn dos Personagens e Objetos
++    hero = spawn Hero;
++    hero.x = 5;
++    hero.y = 5;
++
++    spawn KeyItem;
++    spawn Monster;
++    spawn Skeleton;
++    spawn Chest;
++    spawn Potion;
++
++    msg("Explore a Masmorra! Ache a chave 'k' para a porta trancada (+).", "yellow");
++    beep(440, 40);
++}
++
++update {
++    // A camera segue suavemente o heroi pelo mapa
++    camera(hero.x - 30, hero.y - 10);
++
++    if (hp > 0) {
++        // Movimento para CIMA com deteccao de paredes solidas
++        if (key_pressed("UP") || key_pressed("W")) {
++            if (!tile_solid(hero.x, hero.y - 1)) {
++                hero.y = hero.y - 1;
++            } else {
++                if (tile_at(hero.x, hero.y - 1) == "+") {
++                    if (keys > 0) {
++                        keys = keys - 1;
++                        tile(hero.x, hero.y - 1, "/", "yellow", 0);
++                        msg("Porta destrancada com a chave de ferro!", "green");
++                        beep(700, 50);
++                    } else {
++                        msg("Porta trancada (+)! Encontre a chave 'k' primeiro.", "red");
++                        beep(200, 40);
++                    }
++                } else {
++                    msg("Parede solida bloqueia seu avanco.", "white");
++                }
++            }
++        }
++
++        // Movimento para BAIXO
++        if (key_pressed("DOWN") || key_pressed("S")) {
++            if (!tile_solid(hero.x, hero.y + 1)) {
++                hero.y = hero.y + 1;
++            } else {
++                if (tile_at(hero.x, hero.y + 1) == "+") {
++                    if (keys > 0) {
++                        keys = keys - 1;
++                        tile(hero.x, hero.y + 1, "/", "yellow", 0);
++                        msg("Porta destrancada com a chave de ferro!", "green");
++                        beep(700, 50);
++                    } else {
++                        msg("Porta trancada (+)! Encontre a chave 'k' primeiro.", "red");
++                        beep(200, 40);
++                    }
++                } else {
++                    msg("Parede solida bloqueia seu avanco.", "white");
++                }
++            }
++        }
++
++        // Movimento para ESQUERDA
++        if (key_pressed("LEFT") || key_pressed("A")) {
++            if (!tile_solid(hero.x - 1, hero.y)) {
++                hero.x = hero.x - 1;
++            } else {
++                msg("Parede solida bloqueia seu avanco.", "white");
++            }
++        }
++
++        // Movimento para DIREITA
++        if (key_pressed("RIGHT") || key_pressed("D")) {
++            if (!tile_solid(hero.x + 1, hero.y)) {
++                hero.x = hero.x + 1;
++            } else {
++                msg("Parede solida bloqueia seu avanco.", "white");
++            }
++        }
++
++        // Interacao com a Fonte Sagrada
++        if (tile_at(hero.x, hero.y) == "~" && hp < 100) {
++            hp = hp + 1;
++            msg("Agua sagrada regenera suas forcas (+1 HP)", "cyan");
++        }
++    }
++}
++
++// Coleta da chave de ferro
++on collision(Hero, KeyItem) as (h, k) {
++    keys = keys + 1;
++    destroy k;
++    msg("Voce pegou a Chave Antiga de Ferro [k]!", "yellow");
++    beep(880, 50);
++}
++
++// Abertura do Bau de Tesouro
++on collision(Hero, Chest) as (h, c) {
++    gold = gold + c.value;
++    destroy c;
++    msg("Bau aberto! Encontrou 100 Moedas de Ouro!", "yellow");
++    beep(950, 70);
++}
++
++// Pocao de cura
++on collision(Hero, Potion) as (h, p) {
++    hp = hp + p.heal;
++    if (hp > 100) {
++        hp = 100;
++    }
++    destroy p;
++    msg("Pocao magica consumida! (+40 HP)", "magenta");
++    beep(600, 40);
++}
++
++// Combate com o Orc Monstro
++on collision(Hero, Monster) as (h, m) {
++    hp = hp - 15;
++    m.hp = m.hp - 15;
++    beep(180, 40);
++    if (m.hp <= 0) {
++        destroy m;
++        gold = gold + 30;
++        msg("O Monstro foi derrotado! +30 Ouro!", "green");
++    } else {
++        msg("Duelo feroz com o Monstro! Voce tomou 15 de dano!", "red");
++    }
++    if (hp <= 0) {
++        hp = 0;
++        msg("Voce pereceu nas catacumbas... [ESC/Q para sair]", "red");
++    }
++}
++
++// Combate com o Esqueleto
++on collision(Hero, Skeleton) as (h, s) {
++    hp = hp - 10;
++    s.hp = s.hp - 15;
++    beep(220, 30);
++    if (s.hp <= 0) {
++        destroy s;
++        gold = gold + 15;
++        msg("O Esqueleto virou po! +15 Ouro!", "green");
++    } else {
++        msg("O Esqueleto te atingiu com a espada gasta! -10 HP", "red");
++    }
++    if (hp <= 0) {
++        hp = 0;
++        msg("Voce pereceu nas catacumbas... [ESC/Q para sair]", "red");
++    }
++}
+diff --git a/include/Bytecode.h b/include/Bytecode.h
+index caf0ced..3a9f536 100644
+--- a/include/Bytecode.h
++++ b/include/Bytecode.h
+@@ -121,7 +121,16 @@ enum class OpCode : uint8_t {
+     OP_BEEP,
+     OP_RANDOM,
+     OP_PRINT_AT,
+-    OP_COUNT_ENTITIES
++    OP_COUNT_ENTITIES,
++
++    // RPG Map Operations
++    OP_TILE_SET,
++    OP_TILE_SOLID,
++    OP_TILE_GET,
++    OP_MAP_BOX,
++    OP_MAP_ROW,
++    OP_CAMERA_SET,
++    OP_SET_MESSAGE
+ };
+ 
+ struct Chunk {
+diff --git a/include/Engine.h b/include/Engine.h
+index bb32a5a..30650b5 100644
+--- a/include/Engine.h
++++ b/include/Engine.h
+@@ -10,6 +10,12 @@ struct Pixel {
+     Color color = Color::White;
+ };
+ 
++struct Tile {
++    char ch = ' ';
++    Color color = Color::Default;
++    bool solid = false;
++};
++
+ struct Entity {
+     uint32_t id = 0;
+     std::string type;
+@@ -72,6 +78,23 @@ public:
+     void playBeep(int freq, int durationMs);
+     int getRandomInt(int minVal, int maxVal);
+ 
++    // RPG Map & Tilemap
++    void setMapSize(int w, int h);
++    void setTile(int x, int y, char ch, Color color, bool solid);
++    bool isTileSolid(int x, int y) const;
++    char getTileChar(int x, int y) const;
++    void fillMapBox(int x, int y, int w, int h, char ch, Color color, bool solid);
++    void setMapRow(int x, int y, const std::string& row, Color color, bool solid);
++    void setCamera(int cx, int cy);
++    int getCameraX() const { return cameraX; }
++    int getCameraY() const { return cameraY; }
++    void setMessage(const std::string& msg, Color color = Color::Yellow);
++    const std::string& getMessage() const { return currentMessage; }
++    Color getMessageColor() const { return messageColor; }
++    const std::vector<Tile>& getTiles() const { return tiles; }
++    int getMapWidth() const { return mapWidth; }
++    int getMapHeight() const { return mapHeight; }
++
+     bool shouldClose() const { return exitRequested; }
+     void requestExit() { exitRequested = true; }
+ 
+@@ -87,6 +110,15 @@ private:
+     int targetFps;
+     std::string title;
+ 
++    // Tilemap & Camera state
++    int mapWidth = 0;
++    int mapHeight = 0;
++    std::vector<Tile> tiles;
++    int cameraX = 0;
++    int cameraY = 0;
++    std::string currentMessage;
++    Color messageColor = Color::Yellow;
++
+     std::vector<Pixel> frontBuffer;
+     std::vector<Pixel> backBuffer;
+ 
+diff --git a/src/Bytecode.cpp b/src/Bytecode.cpp
+index e0439e1..ca3be6d 100644
+--- a/src/Bytecode.cpp
++++ b/src/Bytecode.cpp
+@@ -40,6 +40,13 @@ const char* opCodeName(OpCode op) {
+         case OpCode::OP_RANDOM: return "OP_RANDOM";
+         case OpCode::OP_PRINT_AT: return "OP_PRINT_AT";
+         case OpCode::OP_COUNT_ENTITIES: return "OP_COUNT_ENTITIES";
++        case OpCode::OP_TILE_SET: return "OP_TILE_SET";
++        case OpCode::OP_TILE_SOLID: return "OP_TILE_SOLID";
++        case OpCode::OP_TILE_GET: return "OP_TILE_GET";
++        case OpCode::OP_MAP_BOX: return "OP_MAP_BOX";
++        case OpCode::OP_MAP_ROW: return "OP_MAP_ROW";
++        case OpCode::OP_CAMERA_SET: return "OP_CAMERA_SET";
++        case OpCode::OP_SET_MESSAGE: return "OP_SET_MESSAGE";
+         default: return "OP_UNKNOWN";
+     }
+ }
+diff --git a/src/Compiler.cpp b/src/Compiler.cpp
+index 14d95ef..2221eaf 100644
+--- a/src/Compiler.cpp
++++ b/src/Compiler.cpp
+@@ -524,6 +524,56 @@ void Compiler::compileCall(const CallExpr& expr, Chunk& chunk, ScopeContext& sco
+         emitOp(chunk, OpCode::OP_NULL); // push result
+         return;
+     }
++    if (expr.callee == "tile") {
++        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
++        if (expr.arguments.size() < 4) emitConstant(chunk, Value("white"));
++        if (expr.arguments.size() < 5) emitConstant(chunk, Value(0.0));
++        emitOp(chunk, OpCode::OP_TILE_SET);
++        emitOp(chunk, OpCode::OP_NULL);
++        return;
++    }
++    if (expr.callee == "tile_solid") {
++        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
++        emitOp(chunk, OpCode::OP_TILE_SOLID);
++        return;
++    }
++    if (expr.callee == "tile_at") {
++        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
++        emitOp(chunk, OpCode::OP_TILE_GET);
++        return;
++    }
++    if (expr.callee == "map_box") {
++        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
++        if (expr.arguments.size() < 5) emitConstant(chunk, Value("#"));
++        if (expr.arguments.size() < 6) emitConstant(chunk, Value("gray"));
++        if (expr.arguments.size() < 7) emitConstant(chunk, Value(1.0));
++        emitOp(chunk, OpCode::OP_MAP_BOX);
++        emitOp(chunk, OpCode::OP_NULL);
++        return;
++    }
++    if (expr.callee == "map_row") {
++        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
++        if (expr.arguments.size() < 4) emitConstant(chunk, Value("white"));
++        if (expr.arguments.size() < 5) emitConstant(chunk, Value(0.0));
++        emitOp(chunk, OpCode::OP_MAP_ROW);
++        emitOp(chunk, OpCode::OP_NULL);
++        return;
++    }
++    if (expr.callee == "camera") {
++        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
++        emitOp(chunk, OpCode::OP_CAMERA_SET);
++        emitOp(chunk, OpCode::OP_NULL);
++        return;
++    }
++    if (expr.callee == "msg" || expr.callee == "dialog") {
++        for (const auto& arg : expr.arguments) compileExpression(*arg, chunk, scope);
++        if (expr.arguments.size() < 2) {
++            emitConstant(chunk, Value("yellow"));
++        }
++        emitOp(chunk, OpCode::OP_SET_MESSAGE);
++        emitOp(chunk, OpCode::OP_NULL);
++        return;
++    }
+ 
+     // User-defined function call
+     // Push callee name
+diff --git a/src/Engine.cpp b/src/Engine.cpp
+index 2688c9c..718138b 100644
+--- a/src/Engine.cpp
++++ b/src/Engine.cpp
+@@ -8,6 +8,9 @@ Engine::Engine(int width, int height, int fps, const std::string& title)
+     : width(width), height(height), targetFps(fps), title(title) {
+     frontBuffer.resize(width * height, Pixel{' ', Color::Default});
+     backBuffer.resize(width * height, Pixel{' ', Color::Default});
++    mapWidth = width;
++    mapHeight = height;
++    tiles.resize(mapWidth * mapHeight, Tile{' ', Color::Default, false});
+     lastFrameTime = std::chrono::steady_clock::now();
+ }
+ 
+@@ -83,6 +86,57 @@ void Engine::drawBox(int x, int y, int w, int h, Color color) {
+     setPixel(x + w - 1, y + h - 1, '+', color);
+ }
+ 
++void Engine::setMapSize(int w, int h) {
++    if (w <= 0 || h <= 0) return;
++    mapWidth = w;
++    mapHeight = h;
++    tiles.assign(mapWidth * mapHeight, Tile{' ', Color::Default, false});
++}
++
++void Engine::setTile(int x, int y, char ch, Color color, bool solid) {
++    if (x >= 0 && x < mapWidth && y >= 0 && y < mapHeight) {
++        tiles[y * mapWidth + x] = Tile{ch, color, solid};
++    }
++}
++
++bool Engine::isTileSolid(int x, int y) const {
++    if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) return true;
++    return tiles[y * mapWidth + x].solid;
++}
++
++char Engine::getTileChar(int x, int y) const {
++    if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) return '#';
++    return tiles[y * mapWidth + x].ch;
++}
++
++void Engine::fillMapBox(int x, int y, int w, int h, char ch, Color color, bool solid) {
++    for (int cy = y; cy < y + h; ++cy) {
++        for (int cx = x; cx < x + w; ++cx) {
++            if (cy == y || cy == y + h - 1 || cx == x || cx == x + w - 1) {
++                setTile(cx, cy, ch, color, solid);
++            }
++        }
++    }
++}
++
++void Engine::setMapRow(int x, int y, const std::string& row, Color color, bool solid) {
++    for (size_t i = 0; i < row.size(); ++i) {
++        if (row[i] != ' ') {
++            setTile(x + static_cast<int>(i), y, row[i], color, solid);
++        }
++    }
++}
++
++void Engine::setCamera(int cx, int cy) {
++    cameraX = cx;
++    cameraY = cy;
++}
++
++void Engine::setMessage(const std::string& msg, Color color) {
++    currentMessage = msg;
++    messageColor = color;
++}
++
+ void Engine::present() {
+     std::string frame;
+     frame.reserve(width * height * 12);
+diff --git a/src/Transpiler.cpp b/src/Transpiler.cpp
+index 9eb9f0f..157fd1c 100644
+--- a/src/Transpiler.cpp
++++ b/src/Transpiler.cpp
+@@ -121,6 +121,7 @@ namespace GameRuntime {
+     }
+ 
+     struct Pixel { char ch = ' '; Color color = Color::White; };
++    struct Tile { char ch = ' '; Color color = Color::White; bool solid = false; };
+ )RAW";
+ 
+     ss << "    struct BaseEntity {\n";
+@@ -242,6 +243,13 @@ namespace GameRuntime {
+         std::string title;
+         bool exitRequested = false;
+         std::vector<Pixel> backBuffer;
++        int mapWidth = 80;
++        int mapHeight = 25;
++        std::vector<Tile> tiles;
++        int cameraX = 0;
++        int cameraY = 0;
++        std::string currentMessage;
++        Color messageColor = Color::Yellow;
+         uint32_t nextId = 1;
+         std::unordered_map<std::string, bool> keysDown;
+         std::unordered_map<std::string, bool> keysPressed;
+@@ -254,9 +262,60 @@ namespace GameRuntime {
+ 
+         Engine(int w, int h, int fps, std::string t) : width(w), height(h), targetFps(fps), title(t) {
+             backBuffer.resize(w * h, Pixel{' ', Color::Default});
++            mapWidth = w;
++            mapHeight = h;
++            tiles.resize(w * h, Tile{' ', Color::Default, false});
+             lastFrameTime = std::chrono::steady_clock::now();
+         }
+ 
++        void setMapSize(int w, int h) {
++            mapWidth = w;
++            mapHeight = h;
++            tiles.assign(w * h, Tile{' ', Color::Default, false});
++        }
++
++        void setTile(int x, int y, char ch, Color col, bool solid) {
++            if (x >= 0 && x < mapWidth && y >= 0 && y < mapHeight) {
++                tiles[y * mapWidth + x] = Tile{ch, col, solid};
++            }
++        }
++
++        bool isTileSolid(int x, int y) const {
++            if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) return true;
++            return tiles[y * mapWidth + x].solid;
++        }
++
++        char getTileChar(int x, int y) const {
++            if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) return ' ';
++            return tiles[y * mapWidth + x].ch;
++        }
++
++        void fillMapBox(int x, int y, int w, int h, char ch, Color col, bool solid) {
++            for (int cy = y; cy < y + h; ++cy) {
++                for (int cx = x; cx < x + w; ++cx) {
++                    if (cy == y || cy == y + h - 1 || cx == x || cx == x + w - 1) {
++                        setTile(cx, cy, ch, col, solid);
++                    }
++                }
++            }
++        }
++
++        void setMapRow(int x, int y, const std::string& row, Color col, bool solid) {
++            for (size_t i = 0; i < row.size(); ++i) {
++                setTile(x + (int)i, y, row[i], col, solid);
++            }
++        }
++
++        void setCamera(int cx, int cy) {
++            cameraX = cx;
++            cameraY = cy;
++        }
++
++        void setMessage(const std::string& msg, Color col = Color::Yellow) {
++            currentMessage = msg;
++            messageColor = col;
++        }
++
+         void initTerminal() {
+             #ifdef _WIN32
+             hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+@@ -480,6 +539,34 @@ namespace GameRuntime {
+     ss << "    return cnt;\n";
+     ss << "}\n\n";
+ 
++    // RPG Map helpers
++    ss << "inline void tile(const GameRuntime::Value& x, const GameRuntime::Value& y, const GameRuntime::Value& ch, const GameRuntime::Value& col = \"white\", const GameRuntime::Value& solid = 0.0) {\n";
++    ss << "    char c = ch.str.empty() ? ' ' : ch.str[0];\n";
++    ss << "    engine.setTile((int)x.num, (int)y.num, c, GameRuntime::parseColor(col.str), solid.num != 0.0);\n";
++    ss << "}\n";
++    ss << "inline GameRuntime::Value tile_solid(const GameRuntime::Value& x, const GameRuntime::Value& y) {\n";
++    ss << "    return GameRuntime::Value(engine.isTileSolid((int)x.num, (int)y.num) ? 1.0 : 0.0);\n";
++    ss << "}\n";
++    ss << "inline GameRuntime::Value tile_at(const GameRuntime::Value& x, const GameRuntime::Value& y) {\n";
++    ss << "    return GameRuntime::Value(std::string(1, engine.getTileChar((int)x.num, (int)y.num)));\n";
++    ss << "}\n";
++    ss << "inline void map_box(const GameRuntime::Value& x, const GameRuntime::Value& y, const GameRuntime::Value& w, const GameRuntime::Value& h, const GameRuntime::Value& ch = \"#\", const GameRuntime::Value& col = \"gray\", const GameRuntime::Value& solid = 1.0) {\n";
++    ss << "    char c = ch.str.empty() ? '#' : ch.str[0];\n";
++    ss << "    engine.fillMapBox((int)x.num, (int)y.num, (int)w.num, (int)h.num, c, GameRuntime::parseColor(col.str), solid.num != 0.0);\n";
++    ss << "}\n";
++    ss << "inline void map_row(const GameRuntime::Value& x, const GameRuntime::Value& y, const GameRuntime::Value& row, const GameRuntime::Value& col = \"white\", const GameRuntime::Value& solid = 0.0) {\n";
++    ss << "    engine.setMapRow((int)x.num, (int)y.num, row.str, GameRuntime::parseColor(col.str), solid.num != 0.0);\n";
++    ss << "}\n";
++    ss << "inline void camera(const GameRuntime::Value& cx, const GameRuntime::Value& cy) {\n";
++    ss << "    engine.setCamera((int)cx.num, (int)cy.num);\n";
++    ss << "}\n";
++    ss << "inline void msg(const GameRuntime::Value& m, const GameRuntime::Value& col = \"yellow\") {\n";
++    ss << "    engine.setMessage(m.str.empty() ? std::to_string((int)m.num) : m.str, GameRuntime::parseColor(col.str));\n";
++    ss << "}\n";
++    ss << "inline void dialog(const GameRuntime::Value& m, const GameRuntime::Value& col = \"yellow\") {\n";
++    ss << "    msg(m, col);\n";
++    ss << "}\n\n";
++
+     // Functions
+     for (const auto& fn : program.functions) {
+         ss << "GameRuntime::Value fn_" << fn->name << "(";
+@@ -501,6 +588,9 @@ namespace GameRuntime {
+     declaredFns.insert("key"); declaredFns.insert("key_down"); declaredFns.insert("key_pressed");
+     declaredFns.insert("beep"); declaredFns.insert("random"); declaredFns.insert("destroy");
+     declaredFns.insert("count");
++    declaredFns.insert("tile"); declaredFns.insert("tile_solid"); declaredFns.insert("tile_at");
++    declaredFns.insert("map_box"); declaredFns.insert("map_row"); declaredFns.insert("camera");
++    declaredFns.insert("msg"); declaredFns.insert("dialog");
+ 
+     for (const auto& call : calledFunctions) {
+         if (declaredFns.find(call) == declaredFns.end()) {
+@@ -559,13 +649,27 @@ namespace GameRuntime {
+     // Render function
+     ss << "void game_render() {\n";
+     ss << "    engine.clear();\n";
++    ss << "    for (int sy = 1; sy < engine.height - 1; ++sy) {\n";
++    ss << "        int my = sy + engine.cameraY;\n";
++    ss << "        if (my < 0 || my >= engine.mapHeight) continue;\n";
++    ss << "        for (int sx = 1; sx < engine.width - 1; ++sx) {\n";
++    ss << "            int mx = sx + engine.cameraX;\n";
++    ss << "            if (mx < 0 || mx >= engine.mapWidth) continue;\n";
++    ss << "            const auto& t = engine.tiles[my * engine.mapWidth + mx];\n";
++    ss << "            if (t.ch != ' ' && t.ch != '\\0') engine.setPixel(sx, sy, t.ch, t.color);\n";
++    ss << "        }\n";
++    ss << "    }\n";
+     ss << "    engine.drawBox(0, 0, engine.width, engine.height, GameRuntime::Color::Blue);\n";
+     ss << "    engine.drawText(2, 0, \" " << program.config.title << " \", GameRuntime::Color::Cyan);\n";
+     bool hasScore = false;
+     bool hasLives = false;
++    bool hasHp = false;
++    bool hasGold = false;
+     for (const auto& g : program.globals) {
+         if (g->name == "score") hasScore = true;
+         if (g->name == "lives") hasLives = true;
++        if (g->name == "hp") hasHp = true;
++        if (g->name == "gold") hasGold = true;
+     }
+     if (hasScore) {
+         ss << "    engine.drawText(engine.width - 16, 0, \"Score: \" + std::to_string((int)score), GameRuntime::Color::Yellow);\n";
+@@ -573,11 +677,23 @@ namespace GameRuntime {
+     if (hasLives) {
+         ss << "    engine.drawText(2, engine.height - 1, \"Lives: \" + std::to_string((int)lives), GameRuntime::Color::Green);\n";
+     }
++    if (hasHp) {
++        ss << "    engine.drawText(" << (hasLives ? 14 : 2) << ", engine.height - 1, \"HP: \" + std::to_string((int)hp), GameRuntime::Color::Red);\n";
++    }
++    if (hasGold) {
++        ss << "    engine.drawText(26, engine.height - 1, \"Ouro: \" + std::to_string((int)gold), GameRuntime::Color::Yellow);\n";
++    }
+ 
+-    // Draw entities
++    // Draw entities (with camera offset)
+     for (const auto& entity : program.entities) {
+         ss << "    for (auto& e : entities_" << entity->name << ") {\n";
+-        ss << "        if (e->active) engine.setPixel((int)std::round(e->x), (int)std::round(e->y), e->symbol.empty() ? '?' : e->symbol[0], GameRuntime::parseColor(e->color));\n";
++        ss << "        if (e->active) {\n";
++        ss << "            int ex = (int)std::round(e->x) - engine.cameraX;\n";
++        ss << "            int ey = (int)std::round(e->y) - engine.cameraY;\n";
++        ss << "            if (ex > 0 && ex < engine.width - 1 && ey > 0 && ey < engine.height - 1) {\n";
++        ss << "                engine.setPixel(ex, ey, e->symbol.empty() ? '?' : e->symbol[0], GameRuntime::parseColor(e->color));\n";
++        ss << "            }\n";
++        ss << "        }\n";
+         ss << "    }\n";
+     }
+ 
+@@ -587,6 +703,13 @@ namespace GameRuntime {
+         }
+     }
+ 
++    // RPG Dialogue banner
++    ss << "    if (!engine.currentMessage.empty()) {\n";
++    ss << "        std::string msgBar = \"[ \" + engine.currentMessage + \" ]\";\n";
++    ss << "        int msgX = std::max(2, (engine.width - (int)msgBar.length()) / 2);\n";
++    ss << "        engine.drawText(msgX, engine.height - 2, msgBar, engine.messageColor);\n";
++    ss << "    }\n";
++
+     ss << "    engine.drawText(engine.width - 15, engine.height - 1, \"[ESC/Q: Sair]\", GameRuntime::Color::Default);\n";
+     ss << "    engine.present();\n";
+     ss << "}\n\n";
+@@ -694,7 +817,9 @@ void Transpiler::transpileExpression(const Expr& expr, std::ostringstream& ss) {
+     } else if (auto call = dynamic_cast<const CallExpr*>(&expr)) {
+         if (call->callee == "key" || call->callee == "key_down" || call->callee == "key_pressed" ||
+             call->callee == "beep" || call->callee == "random" || call->callee == "destroy" ||
+-            call->callee == "count") {
++            call->callee == "count" || call->callee == "tile" || call->callee == "tile_solid" ||
++            call->callee == "tile_at" || call->callee == "map_box" || call->callee == "map_row" ||
++            call->callee == "camera" || call->callee == "msg" || call->callee == "dialog") {
+             ss << call->callee << "(";
+         } else {
+             ss << "fn_" << call->callee << "(";
+diff --git a/src/VM.cpp b/src/VM.cpp
+index 25fcac8..5b47d25 100644
+--- a/src/VM.cpp
++++ b/src/VM.cpp
+@@ -385,6 +385,83 @@ InterpretResult VM::executeChunk(const Chunk& chunk, size_t baseOffset) {
+                 break;
+             }
+ 
++            case OpCode::OP_TILE_SET: {
++                Value solidVal = pop();
++                Value colVal = pop();
++                Value chVal = pop();
++                Value yVal = pop();
++                Value xVal = pop();
++                int x = static_cast<int>(xVal.asNumber());
++                int y = static_cast<int>(yVal.asNumber());
++                char ch = chVal.isString() && !chVal.asString().empty() ? chVal.asString()[0] : ' ';
++                Color c = colVal.isString() ? parseColor(colVal.asString()) : Color::White;
++                bool solid = solidVal.isBool() ? solidVal.asBool() : (solidVal.asNumber() != 0.0);
++                engine.setTile(x, y, ch, c, solid);
++                break;
++            }
++            case OpCode::OP_TILE_SOLID: {
++                Value yVal = pop();
++                Value xVal = pop();
++                int x = static_cast<int>(xVal.asNumber());
++                int y = static_cast<int>(yVal.asNumber());
++                push(Value(engine.isTileSolid(x, y)));
++                break;
++            }
++            case OpCode::OP_TILE_GET: {
++                Value yVal = pop();
++                Value xVal = pop();
++                int x = static_cast<int>(xVal.asNumber());
++                int y = static_cast<int>(yVal.asNumber());
++                char ch = engine.getTileChar(x, y);
++                push(Value(std::string(1, ch)));
++                break;
++            }
++            case OpCode::OP_MAP_BOX: {
++                Value solidVal = pop();
++                Value colVal = pop();
++                Value chVal = pop();
++                Value hVal = pop();
++                Value wVal = pop();
++                Value yVal = pop();
++                Value xVal = pop();
++                int x = static_cast<int>(xVal.asNumber());
++                int y = static_cast<int>(yVal.asNumber());
++                int w = static_cast<int>(wVal.asNumber());
++                int h = static_cast<int>(hVal.asNumber());
++                char ch = chVal.isString() && !chVal.asString().empty() ? chVal.asString()[0] : '#';
++                Color c = colVal.isString() ? parseColor(colVal.asString()) : Color::Default;
++                bool solid = solidVal.isBool() ? solidVal.asBool() : (solidVal.asNumber() != 0.0);
++                engine.fillMapBox(x, y, w, h, ch, c, solid);
++                break;
++            }
++            case OpCode::OP_MAP_ROW: {
++                Value solidVal = pop();
++                Value colVal = pop();
++                Value rowVal = pop();
++                Value yVal = pop();
++                Value xVal = pop();
++                int x = static_cast<int>(xVal.asNumber());
++                int y = static_cast<int>(yVal.asNumber());
++                std::string row = rowVal.isString() ? rowVal.asString() : "";
++                Color c = colVal.isString() ? parseColor(colVal.asString()) : Color::White;
++                bool solid = solidVal.isBool() ? solidVal.asBool() : (solidVal.asNumber() != 0.0);
++                engine.setMapRow(x, y, row, c, solid);
++                break;
++            }
++            case OpCode::OP_CAMERA_SET: {
++                Value yVal = pop();
++                Value xVal = pop();
++                engine.setCamera(static_cast<int>(xVal.asNumber()), static_cast<int>(yVal.asNumber()));
++                break;
++            }
++            case OpCode::OP_SET_MESSAGE: {
++                Value colVal = pop();
++                Value msgVal = pop();
++                Color c = colVal.isString() ? parseColor(colVal.asString()) : Color::Yellow;
++                engine.setMessage(msgVal.isString() ? msgVal.asString() : msgVal.toString(), c);
++                break;
++            }
++
+             default:
+                 runtimeError("Unknown opcode");
+                 if (!safeMode) return InterpretResult::RuntimeError;
+@@ -472,10 +549,32 @@ void VM::runRender() {
+     try {
+         engine.clearBuffer();
+ 
++        int camX = engine.getCameraX();
++        int camY = engine.getCameraY();
++
++        // Render tilemap background with camera offset
++        const auto& tiles = engine.getTiles();
++        int mapW = engine.getMapWidth();
++        int mapH = engine.getMapHeight();
++        if (!tiles.empty() && mapW > 0) {
++            for (int sy = 1; sy < engine.getHeight() - 1; ++sy) {
++                int my = sy + camY;
++                if (my < 0 || my >= mapH) continue;
++                for (int sx = 1; sx < engine.getWidth() - 1; ++sx) {
++                    int mx = sx + camX;
++                    if (mx < 0 || mx >= mapW) continue;
++                    const auto& t = tiles[my * mapW + mx];
++                    if (t.ch != ' ' && t.ch != '\0') {
++                        engine.setPixel(sx, sy, t.ch, t.color);
++                    }
++                }
++            }
++        }
++
+         // Draw game frame box
+         engine.drawBox(0, 0, engine.getWidth(), engine.getHeight(), Color::Blue);
+ 
+-        // Header info: Title, Score, Lives
++        // Header info: Title, Score
+         std::string titleText = " " + game.config.title + " ";
+         engine.drawText(2, 0, titleText, Color::Cyan);
+ 
+@@ -493,18 +592,33 @@ void VM::runRender() {
+             engine.drawText(2, engine.getHeight() - 1, livesStr, Color::Green);
+         }
+ 
+-        // Render active entities
++        // RPG HUD globals: HP and Gold
++        auto hpIt = globals.find("hp");
++        if (hpIt != globals.end()) {
++            std::string hpStr = "HP: " + hpIt->second.toString();
++            engine.drawText(livesIt != globals.end() ? 14 : 2, engine.getHeight() - 1, hpStr, Color::Red);
++        }
++
++        auto goldIt = globals.find("gold");
++        if (goldIt != globals.end()) {
++            std::string goldStr = "Ouro: " + goldIt->second.toString();
++            engine.drawText(26, engine.getHeight() - 1, goldStr, Color::Yellow);
++        }
++
++        // Render active entities (offset by camera)
+         const auto& entities = engine.getAllEntities();
+         for (const auto& kv : entities) {
+             const Entity& e = kv.second;
+             if (!e.active) continue;
+ 
+-            int x = static_cast<int>(std::round(e.getX()));
+-            int y = static_cast<int>(std::round(e.getY()));
+-            char sym = e.getSymbol();
+-            Color col = e.getColor();
++            int x = static_cast<int>(std::round(e.getX())) - camX;
++            int y = static_cast<int>(std::round(e.getY())) - camY;
+ 
+-            engine.setPixel(x, y, sym, col);
++            if (x > 0 && x < engine.getWidth() - 1 && y > 0 && y < engine.getHeight() - 1) {
++                char sym = e.getSymbol();
++                Color col = e.getColor();
++                engine.setPixel(x, y, sym, col);
++            }
+         }
+ 
+         // Run custom render chunk if defined
+@@ -516,6 +630,13 @@ void VM::runRender() {
+             }
+         }
+ 
++        // RPG Dialogue / Message Banner
++        if (!engine.getMessage().empty()) {
++            std::string msgBar = "[ " + engine.getMessage() + " ]";
++            int msgX = std::max(2, (engine.getWidth() - static_cast<int>(msgBar.length())) / 2);
++            engine.drawText(msgX, engine.getHeight() - 2, msgBar, engine.getMessageColor());
++        }
++
+         // Footer prompt with safe mode status if errors occurred
+         if (safeMode && suppressedErrorCount > 0) {
+             std::string safeTag = "[Safe: " + std::to_string(suppressedErrorCount) + " err isolados]";
+-- 
+2.55.0.windows.3
+
